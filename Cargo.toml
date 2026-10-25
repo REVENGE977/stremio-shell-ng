@@ -1,7 +1,8 @@
 [package]
-name = "stremio-shell-ng"
+name = "stremio-enhanced-ng"
 version = "5.0.27"
 edition = "2018"
+authors = ["REVENGE977", "Smart Code OOD"]
 
 [dependencies]
 base64 = "0.22"
@@ -51,6 +52,7 @@ url = { version = "2", features = ["serde"] }
 uuid = { version = "1.19", features = ["v4"]}
 dirs = "6"
 winreg = "0.52"
+zip-extract = "0.4"
 
 [build-dependencies]
 winres = "0.1"

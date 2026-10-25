@@ -54,7 +54,24 @@ struct Opt {
 }
 
 fn main() {
+    #[cfg(windows)]
+    unsafe {
+        use std::os::windows::ffi::OsStrExt;
+        let app_id_wide: Vec<u16> = std::ffi::OsStr::new(crate::stremio_app::constants::APP_ID)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        #[link(name = "shell32")]
+        extern "system" {
+            fn SetCurrentProcessExplicitAppUserModelID(AppID: *const u16) -> i32;
+        }
+        let _ = SetCurrentProcessExplicitAppUserModelID(app_id_wide.as_ptr());
+    }
+
     nwg::enable_visual_styles();
+
+    // Ensure streaming server and enhanced directories exist at startup
+    let _ = stremio_app::stremio_server::server_dir();
 
     let opt = Opt::parse();
 

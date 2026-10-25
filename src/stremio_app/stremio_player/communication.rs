@@ -263,32 +263,44 @@ pub enum MpvCmd {
     Stop,
     SubAdd,
     SubRemove,
+    Seek,
 }
 stringable!(MpvCmd);
 
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
-#[serde(try_from = "Vec<String>", into = "Vec<String>")]
+#[serde(try_from = "Vec<serde_json::Value>", into = "Vec<String>")]
 pub enum CmdVal {
     Stop,
     Loadfile(String),
     LoadfileAt(String, String),
     SubAdd(String, String, String),
     SubRemove(String),
+    Seek(String, String),
 }
 impl CmdVal {
     pub fn media_transition(&self) -> Option<bool> {
         match self {
             Self::Stop => Some(false),
             Self::Loadfile(_) | Self::LoadfileAt(_, _) => Some(true),
-            Self::SubAdd(_, _, _) | Self::SubRemove(_) => None,
+            Self::SubAdd(_, _, _) | Self::SubRemove(_) | Self::Seek(_, _) => None,
         }
     }
 }
-impl TryFrom<Vec<String>> for CmdVal {
+impl TryFrom<Vec<serde_json::Value>> for CmdVal {
     type Error = String;
 
-    fn try_from(command: Vec<String>) -> Result<Self, Self::Error> {
-        match command.as_slice() {
+    fn try_from(command: Vec<serde_json::Value>) -> Result<Self, Self::Error> {
+        let str_command: Vec<String> = command
+            .iter()
+            .map(|v| match v {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                _ => v.to_string(),
+            })
+            .collect();
+
+        match str_command.as_slice() {
             [name] if name == "stop" => Ok(Self::Stop),
             [name, url] if name == "loadfile" => Ok(Self::Loadfile(url.clone())),
             [name, url, mode, start]
@@ -311,6 +323,12 @@ impl TryFrom<Vec<String>> for CmdVal {
                 if name == "sub-remove" && track_id.parse::<u64>().is_ok_and(|id| id > 0) =>
             {
                 Ok(Self::SubRemove(track_id.clone()))
+            }
+            [name, time, mode] if name == "seek" => {
+                Ok(Self::Seek(time.clone(), mode.clone()))
+            }
+            [name, time] if name == "seek" => {
+                Ok(Self::Seek(time.clone(), "absolute".to_string()))
             }
             _ => Err("unsupported MPV command".to_string()),
         }
@@ -343,6 +361,9 @@ impl From<CmdVal> for Vec<String> {
             ],
             CmdVal::SubRemove(track_id) => {
                 vec![MpvCmd::SubRemove.to_string(), track_id]
+            }
+            CmdVal::Seek(time, mode) => {
+                vec![MpvCmd::Seek.to_string(), time, mode]
             }
         }
     }

@@ -89,6 +89,10 @@ impl ServerProcess {
         self.sender.send(Message::Start).ok();
     }
 
+    pub fn stop(&self) {
+        self.sender.send(Message::Stop).ok();
+    }
+
     pub fn events(&self) -> impl Iterator<Item = ServerEvent> + '_ {
         self.events.try_iter()
     }

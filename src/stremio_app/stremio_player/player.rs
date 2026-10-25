@@ -417,8 +417,8 @@ fn create_mpv(window_handle: HWND) -> Mpv {
             };
         }
         set_property!("wid", window_handle as i64);
-        set_property!("title", "Stremio");
-        set_property!("audio-client-name", "Stremio");
+        set_property!("title", crate::stremio_app::constants::APP_NAME);
+        set_property!("audio-client-name", crate::stremio_app::constants::APP_NAME);
         set_property!("terminal", "yes");
         #[cfg(debug_assertions)]
         set_property!("msg-level", "all=no,cplayer=debug");

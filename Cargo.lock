@@ -1670,7 +1670,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "stremio-shell-ng"
+name = "stremio-enhanced-ng"
 version = "5.0.27"
 dependencies = [
  "anyhow",

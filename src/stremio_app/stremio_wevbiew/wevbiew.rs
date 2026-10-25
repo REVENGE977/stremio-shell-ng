@@ -27,18 +27,62 @@ const APPCOMMAND_MEDIA_PLAY: u32 = 46;
 const APPCOMMAND_MEDIA_PAUSE: u32 = 47;
 const VK_F: u32 = b'F' as u32;
 
-#[derive(Default)]
+#[derive(Clone, Debug)]
+pub enum WebViewCommand {
+    PostMessage(String),
+    ExecuteScript(String),
+    Navigate(String),
+}
+
 pub struct WebView {
     endpoint: Rc<RefCell<Option<String>>>,
     pub dev_tools: Rc<OnceCell<bool>>,
     pub controller: Rc<OnceCell<Controller>>,
     pub channel: ipc::Channel,
+    pub command_sender: flume::Sender<WebViewCommand>,
+    command_receiver: RefCell<Option<flume::Receiver<WebViewCommand>>>,
+    command_queue: Arc<Mutex<VecDeque<WebViewCommand>>>,
+    pub enhanced: Arc<Mutex<Option<Arc<Mutex<crate::stremio_app::enhanced::EnhancedManager>>>>>,
     notice: nwg::Notice,
     compute: RefCell<Option<thread::JoinHandle<()>>>,
-    message_queue: Arc<Mutex<VecDeque<String>>>,
+}
+
+impl Default for WebView {
+    fn default() -> Self {
+        let (tx, rx) = flume::unbounded();
+        Self {
+            endpoint: Rc::new(RefCell::new(None)),
+            dev_tools: Rc::new(OnceCell::new()),
+            controller: Rc::new(OnceCell::new()),
+            channel: RefCell::new(None),
+            command_sender: tx,
+            command_receiver: RefCell::new(Some(rx)),
+            command_queue: Arc::new(Mutex::new(VecDeque::new())),
+            enhanced: Arc::new(Mutex::new(None)),
+            notice: Default::default(),
+            compute: RefCell::new(None),
+        }
+    }
 }
 
 impl WebView {
+    #[allow(dead_code)]
+    pub fn execute_script(&self, script: String) {
+        self.command_sender
+            .send(WebViewCommand::ExecuteScript(script))
+            .ok();
+    }
+
+    pub fn get_command_sender(&self) -> flume::Sender<WebViewCommand> {
+        self.command_sender.clone()
+    }
+
+    pub fn set_enhanced(
+        &self,
+        manager: Arc<Mutex<crate::stremio_app::enhanced::EnhancedManager>>,
+    ) {
+        *self.enhanced.lock().unwrap() = Some(manager);
+    }
     pub fn navigate(&self, endpoint: String) -> webview2::Result<()> {
         *self.endpoint.borrow_mut() = Some(endpoint.clone());
         if let Some(controller) = self.controller.get() {
@@ -131,6 +175,8 @@ impl PartialUi for WebView {
             .build(&mut data.notice)
             .ok();
         let controller_clone = data.controller.clone();
+        let controller_focus = data.controller.clone();
+        let enhanced_for_loading = data.enhanced.clone();
         let endpoint = data.endpoint.clone();
         let webview_flags = "--autoplay-policy=no-user-gesture-required --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
         let result = webview2::EnvironmentBuilder::new()
@@ -237,6 +283,7 @@ impl PartialUi for WebView {
                             Ok(())
                         }).expect("Cannot add full screen element changed");
 
+                        let enhanced_loading_ref = enhanced_for_loading.clone();
                         webview.add_content_loading(move |wv, _| {
                             wv.execute_script(format!(
                                     "window.stremio_server_ipc_key='{}'",
@@ -256,6 +303,19 @@ impl PartialUi for WebView {
                             try{console.log('Shell JS injected');if(window.self === window.top) {
                                 window.qt={webChannelTransport:{send:window.chrome.webview.postMessage}};
                                 window.chrome.webview.addEventListener('message',ev=>window.qt.webChannelTransport.onmessage(ev));
+                                window.ipc = {
+                                    postMessage: function(data) {
+                                        try {
+                                            window.chrome.webview.postMessage(typeof data === 'string' ? data : JSON.stringify(data));
+                                        } catch(e) {}
+                                    },
+                                    addEventListener: function(name, listener) {
+                                        window.chrome.webview.addEventListener(name, listener);
+                                    },
+                                    removeEventListener: function(name, listener) {
+                                        window.chrome.webview.removeEventListener(name, listener);
+                                    }
+                                };
                                 document.addEventListener('click', event => {
                                     const link = event.target.closest('a[href]');
                                     const href = link && link.getAttribute('href');
@@ -268,6 +328,38 @@ impl PartialUi for WebView {
                             window.addEventListener("load", function() {if(initShellComm) try { initShellComm() } catch(e) {}}, false)
 
                             "##, |_| Ok(())).expect("Cannot add script to webview");
+
+                            if let Some(ref mgr_lock) = *enhanced_loading_ref.lock().unwrap() {
+                                let (ui_data, active_theme_css) = {
+                                    let mgr = mgr_lock.lock().unwrap();
+                                    let running = crate::stremio_app::stremio_server::is_streaming_server_online();
+                                    (mgr.ui_data(running), mgr.active_theme().map(|t| t.content.clone()))
+                                };
+
+                                if let Ok(json) = serde_json::to_string(&ui_data) {
+                                    let script = format!("window.__INITIAL_ENHANCED_DATA__ = {json};\n");
+                                    wv.execute_script(&script, |_| Ok(())).ok();
+                                }
+
+                                wv.execute_script(crate::stremio_app::enhanced::ENHANCED_SCRIPT, |_| Ok(())).ok();
+
+                                if let Some(css) = active_theme_css {
+                                    if let Ok(css_json) = serde_json::to_string(&css) {
+                                        let script = format!(r##"
+                                        (function() {{
+                                            try {{
+                                                var s = document.getElementById('activeTheme') || document.createElement('style');
+                                                s.id = 'activeTheme';
+                                                s.textContent = {css_json};
+                                                (document.head || document.documentElement).appendChild(s);
+                                            }} catch(e) {{}}
+                                        }})();
+                                        "##);
+                                        wv.execute_script(&script, |_| Ok(())).ok();
+                                    }
+                                }
+                            }
+
                             Ok(())
                         }).expect("Cannot add content loading");
 
@@ -334,21 +426,34 @@ impl PartialUi for WebView {
         }
 
         let sender = data.notice.sender();
-        let message = data.message_queue.clone();
+        let command_queue = data.command_queue.clone();
+        let command_receiver = data.command_receiver.borrow_mut().take().expect("Command receiver");
+
+        let notice_legacy = sender.clone();
+        let queue_legacy = command_queue.clone();
         *data.compute.borrow_mut() = Some(thread::spawn(move || loop {
             if let Ok(msg) = rx.recv() {
-                let mut message = message.lock().unwrap();
-                message.push_back(msg);
-                sender.notice();
+                let mut queue = queue_legacy.lock().unwrap();
+                queue.push_back(WebViewCommand::PostMessage(msg));
+                notice_legacy.notice();
             }
         }));
 
+        let notice_cmd = sender.clone();
+        let queue_cmd = command_queue.clone();
+        thread::spawn(move || loop {
+            if let Ok(cmd) = command_receiver.recv() {
+                let mut queue = queue_cmd.lock().unwrap();
+                queue.push_back(cmd);
+                notice_cmd.notice();
+            }
+        });
+
         // handler ids equal or smaller than 0xFFFF are reserved by NWG
         let handler_id = 0x10000;
-        let controller_clone = data.controller.clone();
         nwg::bind_raw_event_handler(&parent, handler_id, move |_hwnd, msg, _w, l| {
             if msg == WM_SETFOCUS {
-                controller_clone.get().and_then(|controller| {
+                controller_focus.get().and_then(|controller| {
                     controller
                         .move_focus(webview2::MoveFocusReason::Programmatic)
                         .ok()
@@ -382,12 +487,23 @@ impl PartialUi for WebView {
     ) {
         use nwg::Event as E;
         if evt == E::OnNotice && handle == self.notice.handle {
-            let message_queue = self.message_queue.clone();
             if let Some(controller) = self.controller.get() {
-                let webview = controller.get_webview().expect("Cannot get vebview");
-                let mut message_queue = message_queue.lock().unwrap();
-                for msg in message_queue.drain(..) {
-                    webview.post_web_message_as_string(msg.as_str()).ok();
+                if let Ok(webview) = controller.get_webview() {
+                    let mut queue = self.command_queue.lock().unwrap();
+                    for cmd in queue.drain(..) {
+                        match cmd {
+                            WebViewCommand::PostMessage(msg) => {
+                                webview.post_web_message_as_string(msg.as_str()).ok();
+                            }
+                            WebViewCommand::ExecuteScript(script) => {
+                                webview.execute_script(&script, |_| Ok(())).ok();
+                            }
+                            WebViewCommand::Navigate(endpoint) => {
+                                *self.endpoint.borrow_mut() = Some(endpoint.clone());
+                                Self::navigate_webview(&webview, &endpoint).ok();
+                            }
+                        }
+                    }
                 }
             }
         }

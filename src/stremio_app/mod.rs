@@ -17,3 +17,4 @@ pub mod window_settings;
 pub use named_pipe::{acquire_single_instance, PipeServer, SingleInstance};
 pub mod constants;
 pub mod updater;
+pub mod enhanced;

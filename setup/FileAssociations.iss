@@ -1,12 +1,12 @@
 ; Shared by the x64 and ARM64 per-user installers.
-#define AssocCapabilities "Software\Stremio5\Capabilities"
-#define AssocTorrentKey "Stremio5.Torrent"
-#define AssocStremioKey "Stremio5.Url"
-#define AssocMagnetKey "Stremio5.Magnet"
+#define AssocCapabilities "Software\StremioEnhanced\Capabilities"
+#define AssocTorrentKey "StremioEnhanced.Torrent"
+#define AssocStremioKey "StremioEnhanced.Url"
+#define AssocMagnetKey "StremioEnhanced.Magnet"
 
 [Registry]
-Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "Stremio5"; ValueData: "{#AssocCapabilities}"; Flags: uninsdeletevalue
-Root: HKCU; Subkey: "{#AssocCapabilities}"; ValueType: string; ValueName: "ApplicationName"; ValueData: "Stremio"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "StremioEnhanced"; ValueData: "{#AssocCapabilities}"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "{#AssocCapabilities}"; ValueType: string; ValueName: "ApplicationName"; ValueData: "Stremio Enhanced"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "{#AssocCapabilities}"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Stremio links, torrent files and magnet links"
 Root: HKCU; Subkey: "{#AssocCapabilities}"; ValueType: string; ValueName: "ApplicationIcon"; ValueData: "{app}\{#MyAppExeName},0"
 Root: HKCU; Subkey: "{#AssocCapabilities}\URLAssociations"; ValueType: string; ValueName: "stremio"; ValueData: "{#AssocStremioKey}"

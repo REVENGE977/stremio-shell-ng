@@ -1,4 +1,6 @@
-## Stremio shell: new gen
+## Stremio new gen enhanced
+
+### This is a fork of the original Stremio shell project with Stremio Enhanced features added. Stremio Enhanced is an unofficial community fork and is not affiliated with, sponsored by, or endorsed by Smart Code OOD or Stremio.
 
 A Windows-only shell using WebView2 and MPV
 

@@ -1,2 +1,2 @@
 pub mod wevbiew;
-pub use wevbiew::WebView;
+pub use wevbiew::{WebView, WebViewCommand};

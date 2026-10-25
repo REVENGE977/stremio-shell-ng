@@ -1,3 +1,7 @@
 /target
 /stremio*.exe
+/StremioSetup*.exe
 /libmpv-2.dll
+/stremio-linux-shell
+/server.js
+node_modules/

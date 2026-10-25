@@ -16,8 +16,9 @@ pub struct CacheDirectoryRequest {
     pub directory: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct RPCRequest {
+    #[serde(default)]
     pub id: u64,
     pub args: Option<Vec<serde_json::Value>>,
 }

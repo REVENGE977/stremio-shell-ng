@@ -247,6 +247,20 @@ fn command_sub_remove_tokens() {
 }
 
 #[test]
+fn command_seek_tokens() {
+    let command = CmdVal::Seek("2850.8".to_string(), "absolute".to_string());
+    let value = serde_json::json!(["seek", "2850.8", "absolute"]);
+
+    assert_eq!(
+        serde_json::to_value(InMsg(InMsgFn::MpvCommand, InMsgArgs::Cmd(command.clone()),)).unwrap(),
+        serde_json::json!(["mpv-command", value])
+    );
+    assert_eq!(serde_json::from_value::<CmdVal>(value).unwrap(), command);
+    let num_value = serde_json::json!(["seek", 2850.8, "absolute"]);
+    assert_eq!(serde_json::from_value::<CmdVal>(num_value).unwrap(), command);
+}
+
+#[test]
 fn command_loadfile_accepts_supported_start_shapes() {
     for value in [
         serde_json::json!(["loadfile", "some_file", "replace", "start=+12.5"]),

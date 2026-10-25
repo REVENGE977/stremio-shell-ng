@@ -148,6 +148,13 @@ pub struct MainWindow {
     #[nwg_control]
     #[nwg_events(OnNotice: [Self::on_webui_notice])]
     pub webui_notice: nwg::Notice,
+    pub enhanced: Arc<Mutex<crate::stremio_app::enhanced::EnhancedManager>>,
+    #[nwg_control]
+    #[nwg_events(OnNotice: [Self::on_server_restart_notice])]
+    pub server_restart_notice: nwg::Notice,
+    #[nwg_control]
+    #[nwg_events(OnNotice: [Self::on_server_stop_notice])]
+    pub server_stop_notice: nwg::Notice,
 }
 
 impl MainWindow {
@@ -190,6 +197,7 @@ impl MainWindow {
     }
     fn on_init(&self) {
         self.webview.dev_tools.set(self.dev_tools).ok();
+        self.webview.set_enhanced(self.enhanced.clone());
         if let Some(hwnd) = self.window.handle.hwnd() {
             if let Ok(mut saved_style) = self.saved_window_style.try_borrow_mut() {
                 saved_style.set_title_bar_color(hwnd);
@@ -362,13 +370,180 @@ impl MainWindow {
         let requested_interface_scale = self.requested_interface_scale.clone();
         let webui_events = self.webui_events.clone();
         let webui_sender = self.webui_notice.sender();
+        let webview_cmd_tx = self.webview.get_command_sender();
+        let enhanced_app = self.enhanced.clone();
+        let server_restart_sender = self.server_restart_notice.sender();
+        let server_stop_sender = self.server_stop_notice.sender();
 
         thread::spawn(move || loop {
-            if let Some(msg) = web_rx
-                .recv()
-                .ok()
-                .and_then(|s| serde_json::from_str::<RPCRequest>(&s).ok())
-            {
+            let Ok(raw) = web_rx.recv() else { break; };
+
+            if let Ok(action) = serde_json::from_str::<crate::stremio_app::enhanced::EnhancedAction>(&raw) {
+                match action {
+                    crate::stremio_app::enhanced::EnhancedAction::GetData => {
+                        let mut mgr = enhanced_app.lock().unwrap();
+                        mgr.reload();
+                        let running = crate::stremio_app::stremio_server::is_streaming_server_online();
+                        let data = mgr.ui_data(running);
+                        if let Ok(json) = serde_json::to_string(&data) {
+                            let script = format!("window.__receiveEnhancedData && window.__receiveEnhancedData({json});");
+                            webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
+                        }
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::OpenThemesFolder => {
+                        enhanced_app.lock().unwrap().open_themes_folder();
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::OpenPluginsFolder => {
+                        enhanced_app.lock().unwrap().open_plugins_folder();
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::OpenStreamingServerFolder => {
+                        enhanced_app.lock().unwrap().open_streaming_server_folder();
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::GetServerStatus { id } => {
+                        let running = crate::stremio_app::stremio_server::is_streaming_server_online();
+                        let status = enhanced_app.lock().unwrap().get_server_status(running);
+                        if let Ok(json) = serde_json::to_string(&status) {
+                            let script = format!("window.__receiveServerStatus && window.__receiveServerStatus({id:?}, {json});");
+                            webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
+                        }
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::StartStreamingServer { id } => {
+                        server_restart_sender.notice();
+                        let tx = webview_cmd_tx.clone();
+                        thread::spawn(move || {
+                            thread::sleep(time::Duration::from_millis(1000));
+                            let running = crate::stremio_app::stremio_server::is_streaming_server_online();
+                            let script = format!("window.__receiveServerStartResult && window.__receiveServerStartResult({id:?}, {running});");
+                            tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
+                        });
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::LoadUrl { url } => {
+                        webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::Navigate(url)).ok();
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::PrepareServerUpdate { version } => {
+                        server_stop_sender.notice();
+                        if let Err(e) = enhanced_app.lock().unwrap().prepare_server_update(&version) {
+                            eprintln!("Failed to prepare server update: {e}");
+                        }
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::SkipServerVersion { version } => {
+                        if let Err(e) = enhanced_app.lock().unwrap().skip_server_version(&version) {
+                            eprintln!("Failed to skip server version: {e}");
+                        }
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::TogglePlugin { file_name, enabled } => {
+                        let mut mgr = enhanced_app.lock().unwrap();
+                        mgr.toggle_plugin(&file_name, enabled);
+                        let running = crate::stremio_app::stremio_server::is_streaming_server_online();
+                        let data = mgr.ui_data(running);
+                        if let Ok(json) = serde_json::to_string(&data) {
+                            let script = format!("window.__receiveEnhancedData && window.__receiveEnhancedData({json});");
+                            webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
+                        }
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::ApplyTheme { file_name } => {
+                        let mut mgr = enhanced_app.lock().unwrap();
+                        let new_theme = if file_name == "Default" {
+                            None
+                        } else {
+                            Some(file_name.as_str())
+                        };
+                        let css = mgr.set_active_theme(new_theme);
+                        let css_json = serde_json::to_string(&css.unwrap_or_default()).unwrap_or_else(|_| "\"\"".to_string());
+                        let theme_script = format!(r##"
+                            (function() {{
+                                try {{
+                                    var s = document.getElementById('activeTheme') || document.createElement('style');
+                                    s.id = 'activeTheme';
+                                    s.textContent = {css_json};
+                                    (document.head || document.documentElement).appendChild(s);
+                                }} catch(e) {{}}
+                            }})();
+                        "##);
+                        webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(theme_script)).ok();
+                        let running = crate::stremio_app::stremio_server::is_streaming_server_online();
+                        let data = mgr.ui_data(running);
+                        if let Ok(json) = serde_json::to_string(&data) {
+                            let script = format!("window.__receiveEnhancedData && window.__receiveEnhancedData({json});");
+                            webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
+                        }
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::Log { level, message } => {
+                        match level.as_str() {
+                            "error" => eprintln!("[Enhanced ERROR] {message}"),
+                            "warn" => eprintln!("[Enhanced WARN] {message}"),
+                            _ => println!("[Enhanced INFO] {message}"),
+                        }
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::HttpGet { id, url } => {
+                        let tx = webview_cmd_tx.clone();
+                        thread::spawn(move || {
+                            match crate::stremio_app::enhanced::http_get(&url) {
+                                Ok((status, body)) => {
+                                    let body_json = serde_json::to_string(&body).unwrap_or_else(|_| "\"\"".to_string());
+                                    let script = format!("window.__receiveHttpResponse && window.__receiveHttpResponse({id:?}, {status}, {body_json});");
+                                    tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
+                                }
+                                Err(err) => {
+                                    eprintln!("HttpGet failed for {url}: {err}");
+                                    let err_json = serde_json::to_string(&err).unwrap_or_else(|_| "\"Error\"".to_string());
+                                    let script = format!("window.__receiveHttpResponse && window.__receiveHttpResponse({id:?}, 500, {err_json});");
+                                    tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
+                                }
+                            }
+                        });
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::InstallMod { mod_type, file_name, content } => {
+                        let mut mgr = enhanced_app.lock().unwrap();
+                        if let Err(e) = mgr.install_mod(&mod_type, &file_name, &content) {
+                            eprintln!("Failed to install mod {file_name}: {e}");
+                        }
+                        let running = crate::stremio_app::stremio_server::is_streaming_server_online();
+                        let data = mgr.ui_data(running);
+                        if let Ok(json) = serde_json::to_string(&data) {
+                            let script = format!("window.__receiveEnhancedData && window.__receiveEnhancedData({json});");
+                            webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
+                        }
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::DeleteMod { mod_type, file_name } => {
+                        let mut mgr = enhanced_app.lock().unwrap();
+                        if let Err(e) = mgr.delete_mod(&mod_type, &file_name) {
+                            eprintln!("Failed to delete mod {file_name}: {e}");
+                        }
+                        let css = mgr.active_theme().map(|t| t.content.clone());
+                        let css_json = serde_json::to_string(&css.unwrap_or_default()).unwrap_or_else(|_| "\"\"".to_string());
+                        let theme_script = format!(r##"
+                            (function() {{
+                                try {{
+                                    var s = document.getElementById('activeTheme') || document.createElement('style');
+                                    s.id = 'activeTheme';
+                                    s.textContent = {css_json};
+                                    (document.head || document.documentElement).appendChild(s);
+                                }} catch(e) {{}}
+                            }})();
+                        "##);
+                        webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(theme_script)).ok();
+                        let running = crate::stremio_app::stremio_server::is_streaming_server_online();
+                        let data = mgr.ui_data(running);
+                        if let Ok(json) = serde_json::to_string(&data) {
+                            let script = format!("window.__receiveEnhancedData && window.__receiveEnhancedData({json});");
+                            webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
+                        }
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::DownloadFfmpeg { id } => {
+                        let tx = webview_cmd_tx.clone();
+                        thread::spawn(move || {
+                            let res = crate::stremio_app::stremio_server::download_and_extract_ffmpeg();
+                            let success = res.is_ok();
+                            let script = format!("window.__receiveFfmpegResult && window.__receiveFfmpegResult({id:?}, {success});");
+                            tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
+                        });
+                    }
+                }
+                continue;
+            }
+
+            if let Ok(msg) = serde_json::from_str::<RPCRequest>(&raw) {
                 let local_server_url = local_server_url.lock().unwrap().clone();
                 match msg.get_method() {
                     // The handshake. Here we send some useful data to the WEB UI
@@ -569,7 +744,7 @@ impl MainWindow {
                     }
                     None => {}
                 }
-            } // recv
+            }
         }); // thread
         if self.server.development() {
             self.load_webui(None);
@@ -706,35 +881,25 @@ impl MainWindow {
             match event {
                 ServerEvent::Ready(endpoint) => self.load_webui(Some(&endpoint)),
                 ServerEvent::Failed(details) => {
+                    eprintln!("Streaming server unavailable: {details}");
                     *self.local_server_url.lock().unwrap() = None;
                     if let Some(sender) = self.open_media_sender.borrow().as_ref() {
                         sender.send(OpenRequest::Reset).ok();
                     }
-                    self.splash_screen.hide();
-                    self.on_show();
-                    let content = format!(
-                        "Stremio's local streaming server is unavailable.\n\n{details}\n\nChoose Retry to start the server again, or Cancel to exit Stremio."
-                    );
-                    let choice = nwg::modal_message(
-                        &self.window,
-                        &nwg::MessageParams {
-                            title: "Stremio server",
-                            content: &content,
-                            buttons: nwg::MessageButtons::RetryCancel,
-                            icons: nwg::MessageIcons::Error,
-                        },
-                    );
-                    if choice == nwg::MessageChoice::Retry {
-                        if !self.no_splash {
-                            self.splash_screen.show();
-                        }
-                        self.server.start();
-                    } else {
-                        self.on_exit();
-                    }
+                    // Instead of blocking with a modal error, fall back to Web UI so Enhanced UI
+                    // can load and guide the user through downloading server.js or using Stremio Service.
+                    self.load_webui(None);
                 }
             }
         }
+    }
+    fn on_server_restart_notice(&self) {
+        println!("[MainWindow] Restarting streaming server via notice...");
+        self.server.restart();
+    }
+    fn on_server_stop_notice(&self) {
+        println!("[MainWindow] Stopping streaming server via notice...");
+        self.server.stop();
     }
     fn on_min_max(&self, data: &nwg::EventData) {
         let data = data.on_min_max();
