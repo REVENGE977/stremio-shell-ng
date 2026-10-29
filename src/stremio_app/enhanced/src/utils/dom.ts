@@ -55,6 +55,23 @@ export function injectFallbackStyles(): void {
     const style = document.createElement('style');
     style.id = 'stremio-enhanced-injected-styles';
     style.textContent = `
+        /* Native Player Transparency Bridge */
+        html:has([class*="player-container"]):not(#__shell_guard_root):not(#__shell_guard_body),
+        html:has([class*="video-container"]):not(#__shell_guard_root):not(#__shell_guard_body),
+        html:has(#stremio-shell-bridge-video):not(#__shell_guard_root):not(#__shell_guard_body),
+        body:has([class*="player-container"]):not(#__shell_guard_root):not(#__shell_guard_body),
+        body:has([class*="video-container"]):not(#__shell_guard_root):not(#__shell_guard_body),
+        html:has([class*="player-container"]) body,
+        html:has([class*="video-container"]) body,
+        html:has([class*="player-container"]) #app,
+        html:has([class*="video-container"]) #app,
+        [class*="player-container"],
+        [class*="video-container"],
+        [class*="video-layer"] {
+            background: transparent !important;
+            background-color: transparent !important;
+        }
+
         #enhanced-nav-btn {
             user-select: none;
             font-size: 1.1rem !important;

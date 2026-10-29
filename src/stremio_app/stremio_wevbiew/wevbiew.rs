@@ -316,6 +316,7 @@ impl PartialUi for WebView {
                                         window.chrome.webview.removeEventListener(name, listener);
                                     }
                                 };
+                                window.__STREMIO_SHELL__ = true;
                                 document.addEventListener('click', event => {
                                     const link = event.target.closest('a[href]');
                                     const href = link && link.getAttribute('href');

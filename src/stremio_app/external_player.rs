@@ -1,11 +1,11 @@
 use std::{
-    env, ffi::OsString, fs, os::windows::process::CommandExt, path::PathBuf, process::Command,
+    env, fs, os::windows::process::CommandExt, path::PathBuf, process::Command,
 };
+use winapi::um::winbase::CREATE_BREAKAWAY_FROM_JOB;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use native_windows_gui as nwg;
 use url::Url;
-use winapi::um::winbase::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW};
 use winreg::{
     enums::{HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
     RegKey,
@@ -131,16 +131,7 @@ fn open_playlist(url: &Url) -> Result<(), &'static str> {
     let path = directory.join("playlist.m3u");
     fs::write(&path, format!("#EXTM3U\n#EXTINF:0\n{url}"))
         .map_err(|_| "cannot save M3U playlist")?;
-    let mut quoted_path = OsString::from("\"");
-    quoted_path.push(&path);
-    quoted_path.push("\"");
-    Command::new("cmd")
-        .args(["/C", "start", ""])
-        .raw_arg(quoted_path)
-        .creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW)
-        .spawn()
-        .map(drop)
-        .map_err(|_| "cannot open M3U playlist")
+    open::that(&path).map_err(|_| "cannot open M3U playlist")
 }
 
 #[cfg(test)]

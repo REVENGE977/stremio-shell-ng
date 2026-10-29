@@ -177,19 +177,19 @@
     return new Promise((resolve, reject) => {
       const elm = document.querySelector(selector);
       if (elm) return resolve(elm);
-      const observer = new MutationObserver(() => {
+      const observer2 = new MutationObserver(() => {
         const found = document.querySelector(selector);
         if (found) {
-          observer.disconnect();
+          observer2.disconnect();
           resolve(found);
         }
       });
-      observer.observe(document.body || document.documentElement, {
+      observer2.observe(document.body || document.documentElement, {
         childList: true,
         subtree: true
       });
       setTimeout(() => {
-        observer.disconnect();
+        observer2.disconnect();
         reject(new Error("Timeout waiting for: " + selector));
       }, timeout);
     });
@@ -215,6 +215,23 @@
     const style = document.createElement("style");
     style.id = "stremio-enhanced-injected-styles";
     style.textContent = `
+        /* Native Player Transparency Bridge */
+        html:has([class*="player-container"]):not(#__shell_guard_root):not(#__shell_guard_body),
+        html:has([class*="video-container"]):not(#__shell_guard_root):not(#__shell_guard_body),
+        html:has(#stremio-shell-bridge-video):not(#__shell_guard_root):not(#__shell_guard_body),
+        body:has([class*="player-container"]):not(#__shell_guard_root):not(#__shell_guard_body),
+        body:has([class*="video-container"]):not(#__shell_guard_root):not(#__shell_guard_body),
+        html:has([class*="player-container"]) body,
+        html:has([class*="video-container"]) body,
+        html:has([class*="player-container"]) #app,
+        html:has([class*="video-container"]) #app,
+        [class*="player-container"],
+        [class*="video-container"],
+        [class*="video-layer"] {
+            background: transparent !important;
+            background-color: transparent !important;
+        }
+
         #enhanced-nav-btn {
             user-select: none;
             font-size: 1.1rem !important;
@@ -615,7 +632,7 @@
   var prompt_modal_default = '<div data-focus-lock-disabled="false" class="addon-details-modal-container-aBFaQ modal-container-OuxEF modal-container" id="{{ modalId }}" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 999999; display: flex; justify-content: center; align-items: center; background-color: rgba(0, 0, 0, 0.75);">\r\n    <div class="modal-dialog-container-DZMKq" style="width: 50%; max-width: 600px; height: auto; max-height: 80vh; display: flex; flex-direction: column; background: #16152b; border-radius: 0.5rem; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.1);">\r\n        <div class="modal-dialog-content-Xgv7Z" style="display: flex; flex-direction: column; padding: 25px;">\r\n            <div class="title-container-v2mmF" style="font-size: 1.3rem; font-weight: bold; margin-bottom: 8px; color: white;">{{ title }}</div>\r\n            <div style="font-size: 0.95rem; color: #a0a0a0; margin-bottom: 20px; line-height: 1.4;">{{ message }}</div>\r\n            \r\n            <label class="search-bar-k7MXd search-bar-container-p4tSt" style="width: 100%; padding: 0; margin: 0; display: block;">\r\n                <input id="{{ modalId }}-input" size="1" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" tabindex="0" class="search-input-bAgAh text-input-hnLiz" type="text" value="{{ defaultValue }}" style="width: 100%; box-sizing: border-box; height: 42px; padding: 0 15px; background-color: rgba(255, 255, 255, 0.08); color: white; border: 1px solid transparent; border-radius: 0.35rem; outline: none;">\r\n            </label>\r\n            \r\n            <div class="buttons-container-e_JoR" style="margin-top: 25px; display: flex; justify-content: flex-end; gap: 15px;">\r\n                <div tabindex="0" title="Cancel" class="cancel-button-zuUX6 action-button-eprQG button-container-zVLH6" id="{{ modalId }}-cancel" style="cursor: pointer; padding: 10px 20px; border-radius: 4px; background-color: rgba(255,255,255,0.1);">\r\n                    <div class="label-wbfsE" style="color: #ccc;">Cancel</div>\r\n                </div>\r\n                <div tabindex="0" title="Submit" class="action-button-eprQG button-container-zVLH6 install-button-container-yfcq5" id="{{ modalId }}-save" style="cursor: pointer; padding: 10px 24px; border-radius: 4px; background-color: var(--primary-accent-color, #735bf2);">\r\n                    <div class="label-wbfsE" style="color: white; font-weight: bold;">Submit</div>\r\n                </div>\r\n            </div>\r\n        </div>\r\n    </div>\r\n</div>\r\n';
 
   // src/components/modals/alert-modal.html
-  var alert_modal_default = '<div data-focus-lock-disabled="false" class="addon-details-modal-container-aBFaQ modal-container-OuxEF modal-container" id="{{ modalId }}" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 999999; display: flex; justify-content: center; align-items: center; background-color: rgba(0, 0, 0, 0.75); box-sizing: border-box;">\n    <div class="modal-dialog-container-DZMKq" style="width: 90%; max-width: 660px; height: auto; max-height: 85vh; display: flex !important; flex-direction: column !important; background: #16152b; border-radius: 0.75rem; overflow: hidden !important; box-shadow: 0 10px 40px rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.15); box-sizing: border-box !important;">\n        <div class="modal-dialog-content-Xgv7Z" style="display: flex !important; flex-direction: column !important; max-height: 85vh !important; box-sizing: border-box !important; min-height: 0 !important; flex: 1 1 auto !important; overflow: hidden !important;">\n            <div class="title-container-v2mmF" style="padding: 20px 24px 14px 24px; font-size: 1.25rem; font-weight: bold; color: white; border-bottom: 1px solid rgba(255,255,255,0.08); flex-shrink: 0 !important; box-sizing: border-box !important;">{{ title }}</div>\n            \n            <div class="body-container-H80dD modal-dialog-message-scroll" tabindex="0" style="padding: 18px 24px; overflow-y: auto !important; overflow-x: hidden !important; flex: 1 1 auto !important; min-height: 0 !important; max-height: 52vh !important; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.35) rgba(0,0,0,0.2); box-sizing: border-box !important; overscroll-behavior: contain; outline: none;">\n                <div class="addon-details-container-VdGrt" style="width: 100%; box-sizing: border-box;">\n                    <div class="section-container-N6QHW" style="width: 100%; line-height: 1.6; font-size: 0.95rem; color: #ddd; white-space: pre-wrap; word-break: break-word; user-select: text; -webkit-user-select: text;">{{ message }}</div>\n                </div>\n            </div>\n            \n            <div class="buttons-container-e_JoR" style="padding: 14px 24px 18px 24px; display: flex !important; justify-content: flex-end !important; align-items: center !important; gap: 10px !important; flex-wrap: wrap !important; border-top: 1px solid rgba(255,255,255,0.08); background: rgba(0,0,0,0.25); flex-shrink: 0 !important; box-sizing: border-box !important;">\n                {{ buttonsHtml }}\n            </div>\n        </div>\n    </div>\n    <style>\n        #{{ modalId }} .modal-dialog-message-scroll::-webkit-scrollbar {\n            width: 8px !important;\n        }\n        #{{ modalId }} .modal-dialog-message-scroll::-webkit-scrollbar-track {\n            background: rgba(0, 0, 0, 0.25) !important;\n            border-radius: 4px;\n        }\n        #{{ modalId }} .modal-dialog-message-scroll::-webkit-scrollbar-thumb {\n            background: rgba(255, 255, 255, 0.35) !important;\n            border-radius: 4px;\n        }\n        #{{ modalId }} .modal-dialog-message-scroll::-webkit-scrollbar-thumb:hover {\n            background: rgba(255, 255, 255, 0.6) !important;\n        }\n    </style>\n</div>\n';
+  var alert_modal_default = '<div data-focus-lock-disabled="false" class="addon-details-modal-container-aBFaQ modal-container-OuxEF modal-container" id="{{ modalId }}" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 999999; display: flex; justify-content: center; align-items: center; background-color: rgba(0, 0, 0, 0.75); box-sizing: border-box;">\r\n    <div class="modal-dialog-container-DZMKq" style="width: 90%; max-width: 660px; height: auto; max-height: 85vh; display: flex !important; flex-direction: column !important; background: #16152b; border-radius: 0.75rem; overflow: hidden !important; box-shadow: 0 10px 40px rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.15); box-sizing: border-box !important;">\r\n        <div class="modal-dialog-content-Xgv7Z" style="display: flex !important; flex-direction: column !important; max-height: 85vh !important; box-sizing: border-box !important; min-height: 0 !important; flex: 1 1 auto !important; overflow: hidden !important;">\r\n            <div class="title-container-v2mmF" style="padding: 20px 24px 14px 24px; font-size: 1.25rem; font-weight: bold; color: white; border-bottom: 1px solid rgba(255,255,255,0.08); flex-shrink: 0 !important; box-sizing: border-box !important;">{{ title }}</div>\r\n            \r\n            <div class="body-container-H80dD modal-dialog-message-scroll" tabindex="0" style="padding: 18px 24px; overflow-y: auto !important; overflow-x: hidden !important; flex: 1 1 auto !important; min-height: 0 !important; max-height: 52vh !important; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.35) rgba(0,0,0,0.2); box-sizing: border-box !important; overscroll-behavior: contain; outline: none;">\r\n                <div class="addon-details-container-VdGrt" style="width: 100%; box-sizing: border-box;">\r\n                    <div class="section-container-N6QHW" style="width: 100%; line-height: 1.6; font-size: 0.95rem; color: #ddd; white-space: pre-wrap; word-break: break-word; user-select: text; -webkit-user-select: text;">{{ message }}</div>\r\n                </div>\r\n            </div>\r\n            \r\n            <div class="buttons-container-e_JoR" style="padding: 14px 24px 18px 24px; display: flex !important; justify-content: flex-end !important; align-items: center !important; gap: 10px !important; flex-wrap: wrap !important; border-top: 1px solid rgba(255,255,255,0.08); background: rgba(0,0,0,0.25); flex-shrink: 0 !important; box-sizing: border-box !important;">\r\n                {{ buttonsHtml }}\r\n            </div>\r\n        </div>\r\n    </div>\r\n    <style>\r\n        #{{ modalId }} .modal-dialog-message-scroll::-webkit-scrollbar {\r\n            width: 8px !important;\r\n        }\r\n        #{{ modalId }} .modal-dialog-message-scroll::-webkit-scrollbar-track {\r\n            background: rgba(0, 0, 0, 0.25) !important;\r\n            border-radius: 4px;\r\n        }\r\n        #{{ modalId }} .modal-dialog-message-scroll::-webkit-scrollbar-thumb {\r\n            background: rgba(255, 255, 255, 0.35) !important;\r\n            border-radius: 4px;\r\n        }\r\n        #{{ modalId }} .modal-dialog-message-scroll::-webkit-scrollbar-thumb:hover {\r\n            background: rgba(255, 255, 255, 0.6) !important;\r\n        }\r\n    </style>\r\n</div>\r\n';
 
   // src/components/modals/toast.html
   var toast_default = '<div tabindex="-1" class="toast-item-container-nG0uk button-container-zVLH6 {{ status }}" id="{{ id }}" style="margin-bottom: 10px; display: flex; align-items: center; padding: 12px 18px; border-radius: 6px; background-color: #1f1d36; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.4); border-left: 4px solid var(--primary-accent-color, #735bf2); transition: all 0.3s ease;">\r\n    <div class="icon-container-rjAiH" style="margin-right: 12px; display: flex; align-items: center;">\r\n        <svg class="icon-Y4I_O" style="width: 20px; height: 20px; fill: none; stroke: currentcolor; stroke-width: 50;" viewBox="0 0 512 512">\r\n            <path d="M421 128 197 384l-96-96" style="stroke-linecap: round; stroke-linejoin: round;"></path>\r\n        </svg>\r\n    </div>\r\n    <div class="info-container-xD9V6">\r\n        <div class="title-container-VFReJ" style="font-weight: bold; font-size: 0.95rem;">{{ title }}</div>\r\n        <div class="message-container-znkCj" style="font-size: 0.85rem; color: #bbb; margin-top: 2px;">{{ message }}</div>\r\n    </div>\r\n</div>\r\n';
@@ -1502,7 +1519,7 @@ Please place server.js in the folder or start Stremio Service. Would you like to
     navBtn.classList.add(selectedClass);
   }
   function setupScrollObserver(navBtn, section) {
-    const observer = new IntersectionObserver((entries) => {
+    const observer2 = new IntersectionObserver((entries) => {
       entries.forEach((entry) => {
         if (entry.isIntersecting) {
           setActiveNav(navBtn);
@@ -1513,7 +1530,7 @@ Please place server.js in the folder or start Stremio Service. Would you like to
         }
       });
     }, { threshold: 0.1 });
-    observer.observe(section);
+    observer2.observe(section);
   }
   function injectSection(sectionsContainer) {
     const html = TemplateCache.render(settings_section_default, {
@@ -2555,6 +2572,108 @@ Are you sure you want to update? It's recommended to read the source code of the
     };
   }
 
+  // src/bridge/transparencyBridge.ts
+  var isTransparent = false;
+  var modifiedElements = /* @__PURE__ */ new Set();
+  var observer = null;
+  var pollTimer = null;
+  function isPlayerRoute() {
+    const hash = window.location.hash || "";
+    if (hash.startsWith("#/player") || hash.includes("/player/")) return true;
+    if (document.querySelector('[class*="player-container"]') !== null) return true;
+    if (document.querySelector('[class*="video-container"]') !== null) return true;
+    return false;
+  }
+  function enforceTransparency(force) {
+    const shouldBeTransparent = force !== void 0 ? force : isPlayerRoute();
+    const html = document.documentElement;
+    const body = document.body;
+    const app = document.getElementById("app");
+    const playerContainer = document.querySelector('[class*="player-container"]');
+    if (shouldBeTransparent) {
+      if (!html || !body) return;
+      isTransparent = true;
+      if (html.style.getPropertyValue("background") !== "transparent") {
+        html.style.setProperty("background", "transparent", "important");
+        html.style.setProperty("background-color", "transparent", "important");
+      }
+      modifiedElements.add(html);
+      if (body.style.getPropertyValue("background") !== "transparent") {
+        body.style.setProperty("background", "transparent", "important");
+        body.style.setProperty("background-color", "transparent", "important");
+      }
+      modifiedElements.add(body);
+      if (app && app.style.getPropertyValue("background") !== "transparent") {
+        app.style.setProperty("background", "transparent", "important");
+        app.style.setProperty("background-color", "transparent", "important");
+        modifiedElements.add(app);
+      }
+      if (playerContainer) {
+        if (playerContainer.style.getPropertyValue("background-color") !== "transparent") {
+          playerContainer.style.setProperty("background", "transparent", "important");
+          playerContainer.style.setProperty("background-color", "transparent", "important");
+        }
+        modifiedElements.add(playerContainer);
+        let curr = playerContainer.parentElement;
+        while (curr && curr !== body && curr !== html) {
+          if (curr.style.getPropertyValue("background") !== "transparent") {
+            curr.style.setProperty("background", "transparent", "important");
+            curr.style.setProperty("background-color", "transparent", "important");
+          }
+          modifiedElements.add(curr);
+          curr = curr.parentElement;
+        }
+      }
+    } else if (isTransparent) {
+      isTransparent = false;
+      modifiedElements.forEach((el) => {
+        try {
+          el.style.removeProperty("background");
+          el.style.removeProperty("background-color");
+        } catch (_) {
+        }
+      });
+      modifiedElements.clear();
+      html?.style.removeProperty("background");
+      html?.style.removeProperty("background-color");
+      body?.style.removeProperty("background");
+      body?.style.removeProperty("background-color");
+      app?.style.removeProperty("background");
+      app?.style.removeProperty("background-color");
+    }
+  }
+  function setupTransparencyBridge() {
+    enforceTransparency();
+    window.addEventListener("hashchange", () => enforceTransparency());
+    window.addEventListener("popstate", () => enforceTransparency());
+    const attachObserver = () => {
+      if (observer) return;
+      const target = document.documentElement || document.body;
+      if (!target) return;
+      observer = new MutationObserver(() => {
+        enforceTransparency();
+      });
+      observer.observe(target, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["class", "style"]
+      });
+    };
+    if (document.documentElement || document.body) {
+      attachObserver();
+    } else {
+      document.addEventListener("DOMContentLoaded", attachObserver, { once: true });
+    }
+    if (!pollTimer) {
+      pollTimer = setInterval(() => {
+        if (isPlayerRoute()) {
+          enforceTransparency(true);
+        }
+      }, 300);
+    }
+  }
+
   // src/bridge/videoBridge.ts
   var bridgeHost = null;
   var bridgeVideo = null;
@@ -2584,13 +2703,16 @@ Are you sure you want to update? It's recommended to read the source code of the
   }
   function mountBridgeHost() {
     if (!bridgeHost) return;
-    if (document.body && bridgeHost.parentElement !== document.body) {
-      document.body.appendChild(bridgeHost);
-      console.log("[Enhanced] Mounted bridge video host to document.body");
+    const playerContainer = document.querySelector('[class*="player-container"]');
+    const targetParent = playerContainer || document.body;
+    if (targetParent && bridgeHost.parentElement !== targetParent) {
+      targetParent.appendChild(bridgeHost);
+      console.log(`[Enhanced] Mounted bridge video host to ${playerContainer ? "player-container" : "document.body"}`);
     }
   }
   function ensureBridgeVideo() {
     mountBridgeHost();
+    enforceTransparency();
     const dur = durationVal > 0 ? durationVal : PermanentCore.getState?.("player")?.duration / 1e3 || 0;
     if (dur > 0 && bridgeVideo) {
       bridgeVideo.dispatchEvent(new Event("loadedmetadata"));
@@ -2598,6 +2720,7 @@ Are you sure you want to update? It's recommended to read the source code of the
     }
   }
   function setupVideoBridge() {
+    window.__STREMIO_SHELL__ = true;
     bridgeHost = document.getElementById("stremio-enhanced-bridge-host");
     if (!bridgeHost) {
       bridgeHost = document.createElement("div");
@@ -2622,6 +2745,34 @@ Are you sure you want to update? It's recommended to read the source code of the
       bridgeVideo.setAttribute("playsinline", "");
       bridgeVideo.setAttribute("muted", "");
       bridgeHost.appendChild(bridgeVideo);
+    }
+    try {
+      const origDocQS = Document.prototype.querySelector;
+      const origElemQS = Element.prototype.querySelector;
+      Document.prototype.querySelector = function(selectors) {
+        const result = origDocQS.call(this, selectors);
+        if (!result && bridgeVideo && typeof selectors === "string") {
+          if (selectors === "video" || selectors.endsWith(" video") || selectors.includes("player-container") && selectors.includes("video")) {
+            if (document.querySelector('[class*="player-container"]') || window.location.hash.includes("player")) {
+              return bridgeVideo;
+            }
+          }
+        }
+        return result;
+      };
+      Element.prototype.querySelector = function(selectors) {
+        const result = origElemQS.call(this, selectors);
+        if (!result && bridgeVideo && typeof selectors === "string") {
+          if (selectors === "video" || selectors.endsWith(" video")) {
+            if (this.matches?.('[class*="player-container"]') || this.closest?.('[class*="player-container"]')) {
+              return bridgeVideo;
+            }
+          }
+        }
+        return result;
+      };
+    } catch (e) {
+      console.warn("[Enhanced] Could not patch querySelector:", e);
     }
     bridgeVideo.closest = function(selector) {
       if (typeof selector === "string" && selector.includes("player-container")) {
@@ -2956,17 +3107,57 @@ Are you sure you want to update? It's recommended to read the source code of the
     return bridgeVideo;
   }
 
+  // src/bridge/mediaCapabilitiesBridge.ts
+  function setupMediaCapabilitiesBridge() {
+    const isAdvancedCodec = (codecStr) => {
+      if (!codecStr) return false;
+      return /hvc1|hev1|hevc|av01|vp09|vp9|avc1/i.test(codecStr);
+    };
+    if (typeof window !== "undefined" && window.MediaSource) {
+      const origIsTypeSupported = window.MediaSource.isTypeSupported.bind(window.MediaSource);
+      window.MediaSource.isTypeSupported = function(type) {
+        if (isAdvancedCodec(type)) return true;
+        return origIsTypeSupported(type);
+      };
+    }
+    if (typeof HTMLMediaElement !== "undefined" && HTMLMediaElement.prototype.canPlayType) {
+      const origCanPlayType = HTMLMediaElement.prototype.canPlayType;
+      HTMLMediaElement.prototype.canPlayType = function(type) {
+        if (isAdvancedCodec(type)) return "probably";
+        return origCanPlayType.call(this, type);
+      };
+    }
+    if (typeof navigator !== "undefined" && navigator.mediaCapabilities?.decodingInfo) {
+      const origDecodingInfo = navigator.mediaCapabilities.decodingInfo.bind(navigator.mediaCapabilities);
+      navigator.mediaCapabilities.decodingInfo = async function(configuration) {
+        const videoType = configuration?.video?.contentType || "";
+        if (isAdvancedCodec(videoType)) {
+          return {
+            supported: true,
+            smooth: true,
+            powerEfficient: true,
+            keySystemAccess: null
+          };
+        }
+        return origDecodingInfo(configuration);
+      };
+    }
+  }
+
   // src/index.ts
   (function() {
     "use strict";
     if (window.__STREMIO_ENHANCED_INITIALIZED__) return;
     window.__STREMIO_ENHANCED_INITIALIZED__ = true;
+    window.__STREMIO_SHELL__ = true;
     console.log("[Enhanced] Stremio Enhanced initialized.");
     setupPermanentCore();
     setupLogger();
     setupFetchInterceptor();
     setupEnhancedApi();
     setupServerManager();
+    setupMediaCapabilitiesBridge();
+    setupTransparencyBridge();
     setupVideoBridge();
     injectFallbackStyles();
     let currentData = {
