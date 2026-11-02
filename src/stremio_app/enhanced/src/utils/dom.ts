@@ -165,6 +165,18 @@ export function injectFallbackStyles(): void {
             opacity: 0.85;
             cursor: default;
         }
+        /* Picture-in-Picture Compact Mode */
+        html.stremio-pip-mode [class*="player-container"] [class*="control-bar-container"] {
+            zoom: 0.72;
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+        }
+        html.stremio-pip-mode [class*="player-container"] [class*="nav-bar-container"] {
+            zoom: 0.72;
+        }
+        html.stremio-pip-mode .pip-plugin-button {
+            color: var(--primary-accent-color, #7b5bf5) !important;
+        }
     `;
     (document.head || document.documentElement || document.body).appendChild(style);
 }

@@ -325,6 +325,18 @@
             opacity: 0.85;
             cursor: default;
         }
+        /* Picture-in-Picture Compact Mode */
+        html.stremio-pip-mode [class*="player-container"] [class*="control-bar-container"] {
+            zoom: 0.72;
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+        }
+        html.stremio-pip-mode [class*="player-container"] [class*="nav-bar-container"] {
+            zoom: 0.72;
+        }
+        html.stremio-pip-mode .pip-plugin-button {
+            color: var(--primary-accent-color, #7b5bf5) !important;
+        }
     `;
     (document.head || document.documentElement || document.body).appendChild(style);
   }
@@ -2654,6 +2666,8 @@ Are you sure you want to update? It's recommended to read the source code of the
   // src/bridge/videoBridge.ts
   var bridgeHost = null;
   var bridgeVideo = null;
+  var pipActive = false;
+  var pipListenersInitialized = false;
   var currentTimeVal = 0;
   var durationVal = 0;
   var pausedVal = false;
@@ -2665,6 +2679,140 @@ Are you sure you want to update? It's recommended to read the source code of the
   var srcVal = "";
   var videoWidthVal = 1920;
   var videoHeightVal = 1080;
+  function setPipState(enabled, notifyRust = true) {
+    const next = Boolean(enabled);
+    if (pipActive === next && !notifyRust) return;
+    pipActive = next;
+    if (pipActive) {
+      document.documentElement.classList.add("stremio-pip-mode");
+    } else {
+      document.documentElement.classList.remove("stremio-pip-mode");
+      document.documentElement.style.cursor = "";
+    }
+    if (notifyRust) {
+      postEnhancedMessage("setPictureInPicture", { enabled: pipActive });
+    }
+    if (bridgeVideo) {
+      bridgeVideo.dispatchEvent(new Event(pipActive ? "enterpictureinpicture" : "leavepictureinpicture", { bubbles: true }));
+    }
+  }
+  function setupPipWindowInteractions() {
+    if (pipListenersInitialized) return;
+    pipListenersInitialized = true;
+    window.__syncPipState = function(enabled) {
+      setPipState(Boolean(enabled), false);
+    };
+    const RESIZE_BORDER = 8;
+    let dragCandidate = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let suppressNextClick = false;
+    function getResizeDirection(e) {
+      const x = e.clientX;
+      const y = e.clientY;
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const left = x < RESIZE_BORDER;
+      const right = x >= w - RESIZE_BORDER;
+      const top = y < RESIZE_BORDER;
+      const bottom = y >= h - RESIZE_BORDER;
+      if (top && left) return 13;
+      if (top && right) return 14;
+      if (bottom && left) return 16;
+      if (bottom && right) return 17;
+      if (left) return 10;
+      if (right) return 11;
+      if (top) return 12;
+      if (bottom) return 15;
+      return 0;
+    }
+    function cursorForDirection(dir) {
+      switch (dir) {
+        case 13:
+        case 17:
+          return "nwse-resize";
+        case 14:
+        case 16:
+          return "nesw-resize";
+        case 10:
+        case 11:
+          return "ew-resize";
+        case 12:
+        case 15:
+          return "ns-resize";
+        default:
+          return "";
+      }
+    }
+    const INTERACTIVE_SELECTOR = 'input, select, textarea, button, a, .pip-plugin-button, [class*="slider"], [class*="seek"], [class*="thumb"], [class*="track"], [class*="button-container"], [class*="control-bar-button"], [class*="menu-container"], [class*="popup"]';
+    window.addEventListener("pointerdown", (e) => {
+      if (!pipActive || e.button !== 0) return;
+      const resizeDir = getResizeDirection(e);
+      if (resizeDir !== 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return;
+      }
+      const target = e.target;
+      if (target?.closest(INTERACTIVE_SELECTOR)) {
+        return;
+      }
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+    }, true);
+    window.addEventListener("mousedown", (e) => {
+      if (!pipActive || e.button !== 0) return;
+      const resizeDir = getResizeDirection(e);
+      if (resizeDir !== 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        dragCandidate = false;
+        postEnhancedMessage("startPipResize", { direction: resizeDir });
+        return;
+      }
+      const target = e.target;
+      if (target?.closest(INTERACTIVE_SELECTOR)) {
+        dragCandidate = false;
+        return;
+      }
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      dragCandidate = true;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      suppressNextClick = false;
+    }, true);
+    window.addEventListener("mousemove", (e) => {
+      if (!pipActive) return;
+      if (e.buttons === 0) {
+        dragCandidate = false;
+        const dir = getResizeDirection(e);
+        document.documentElement.style.cursor = cursorForDirection(dir);
+        return;
+      }
+      if ((e.buttons & 1) === 1 && dragCandidate) {
+        const dist = Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY);
+        if (dist > 4) {
+          dragCandidate = false;
+          suppressNextClick = true;
+          postEnhancedMessage("startPipDrag");
+        }
+      }
+    }, true);
+    window.addEventListener("mouseup", () => {
+      dragCandidate = false;
+    }, true);
+    window.addEventListener("click", (e) => {
+      if (suppressNextClick) {
+        suppressNextClick = false;
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+      }
+    }, true);
+  }
   function createTimeRanges(start, end) {
     return {
       length: end > start ? 1 : 0,
@@ -2690,6 +2838,12 @@ Are you sure you want to update? It's recommended to read the source code of the
   function ensureBridgeVideo() {
     mountBridgeHost();
     enforceTransparency();
+    if (pipActive) {
+      const inPlayer = window.location.hash.startsWith("#/player") || Boolean(document.querySelector('[class*="player-container"]'));
+      if (!inPlayer) {
+        setPipState(false, true);
+      }
+    }
     const dur = durationVal > 0 ? durationVal : PermanentCore.getState?.("player")?.duration / 1e3 || 0;
     if (dur > 0 && bridgeVideo) {
       bridgeVideo.dispatchEvent(new Event("loadedmetadata"));
@@ -2698,6 +2852,7 @@ Are you sure you want to update? It's recommended to read the source code of the
   }
   function setupVideoBridge() {
     window.__STREMIO_SHELL__ = true;
+    setupPipWindowInteractions();
     bridgeHost = document.getElementById("stremio-enhanced-bridge-host");
     if (!bridgeHost) {
       bridgeHost = document.createElement("div");
@@ -2725,6 +2880,7 @@ Are you sure you want to update? It's recommended to read the source code of the
     }
     try {
       const origDocQS = Document.prototype.querySelector;
+      const origDocQSA = Document.prototype.querySelectorAll;
       const origElemQS = Element.prototype.querySelector;
       Document.prototype.querySelector = function(selectors) {
         const result = origDocQS.call(this, selectors);
@@ -2736,6 +2892,12 @@ Are you sure you want to update? It's recommended to read the source code of the
           }
         }
         return result;
+      };
+      Document.prototype.querySelectorAll = function(selectors) {
+        if (typeof selectors === "string" && selectors.includes("video")) {
+          mountBridgeHost();
+        }
+        return origDocQSA.call(this, selectors);
       };
       Element.prototype.querySelector = function(selectors) {
         const result = origElemQS.call(this, selectors);
@@ -2751,11 +2913,76 @@ Are you sure you want to update? It's recommended to read the source code of the
     } catch (e) {
       console.warn("[Enhanced] Could not patch querySelector:", e);
     }
+    try {
+      const origPipElemDesc = Object.getOwnPropertyDescriptor(Document.prototype, "pictureInPictureElement") || Object.getOwnPropertyDescriptor(ShadowRoot.prototype, "pictureInPictureElement");
+      Object.defineProperty(Document.prototype, "pictureInPictureElement", {
+        get() {
+          if (pipActive && bridgeVideo) return bridgeVideo;
+          return origPipElemDesc?.get ? origPipElemDesc.get.call(this) : null;
+        },
+        configurable: true
+      });
+      Object.defineProperty(Document.prototype, "pictureInPictureEnabled", {
+        get() {
+          return true;
+        },
+        configurable: true
+      });
+      const origExitPip = Document.prototype.exitPictureInPicture;
+      Document.prototype.exitPictureInPicture = function() {
+        if (pipActive) {
+          setPipState(false, true);
+          return Promise.resolve();
+        }
+        if (typeof origExitPip === "function") {
+          return origExitPip.call(this);
+        }
+        return Promise.resolve();
+      };
+    } catch (e) {
+      console.warn("[Enhanced] Could not patch Document PiP API:", e);
+    }
     bridgeVideo.closest = function(selector) {
       if (typeof selector === "string" && selector.includes("player-container")) {
         return document.querySelector('[class*="player-container"]') || document.querySelector(".player-container") || document.body;
       }
       return Element.prototype.closest.call(this, selector);
+    };
+    bridgeVideo.getBoundingClientRect = function() {
+      const playerContainer = document.querySelector('[class*="player-container"]');
+      if (playerContainer) {
+        return playerContainer.getBoundingClientRect();
+      }
+      const w = window.innerWidth || 1280;
+      const h = window.innerHeight || 720;
+      return new DOMRect(0, 0, w, h);
+    };
+    bridgeVideo.requestPictureInPicture = function() {
+      setPipState(true, true);
+      return Promise.resolve({
+        width: window.innerWidth || 480,
+        height: window.innerHeight || 270,
+        onresize: null,
+        addEventListener() {
+        },
+        removeEventListener() {
+        },
+        dispatchEvent() {
+          return true;
+        }
+      });
+    };
+    Object.defineProperty(bridgeVideo, "webkitPresentationMode", {
+      get() {
+        return pipActive ? "picture-in-picture" : "inline";
+      },
+      configurable: true
+    });
+    bridgeVideo.webkitSupportsPresentationMode = function(mode) {
+      return mode === "picture-in-picture" || mode === "inline";
+    };
+    bridgeVideo.webkitSetPresentationMode = function(mode) {
+      setPipState(mode === "picture-in-picture", true);
     };
     try {
       Object.defineProperty(bridgeVideo, "currentTime", {
@@ -2940,7 +3167,8 @@ Are you sure you want to update? It's recommended to read the source code of the
         get() {
           const dur = durationVal > 0 ? durationVal : PermanentCore.getState?.("player")?.duration / 1e3 || 0;
           const s = srcVal || PermanentCore.getState?.("player")?.selected?.stream?.url || "";
-          return dur > 0 || s !== "" ? 4 : 0;
+          const inPlayer = window.location.hash.startsWith("#/player") || Boolean(document.querySelector('[class*="player-container"]'));
+          return dur > 0 || s !== "" || inPlayer ? 4 : 0;
         },
         configurable: true
       });
@@ -3075,6 +3303,12 @@ Are you sure you want to update? It's recommended to read the source code of the
     }
     setInterval(() => {
       mountBridgeHost();
+      if (pipActive) {
+        const inPlayer = window.location.hash.startsWith("#/player") || Boolean(document.querySelector('[class*="player-container"]'));
+        if (!inPlayer) {
+          setPipState(false, true);
+        }
+      }
       const dur = durationVal > 0 ? durationVal : PermanentCore.getState?.("player")?.duration / 1e3 || 0;
       const cur = currentTimeVal > 0 ? currentTimeVal : PermanentCore.getState?.("player")?.time / 1e3 || 0;
       if (!pausedVal && (dur > 0 || cur > 0) && bridgeVideo) {

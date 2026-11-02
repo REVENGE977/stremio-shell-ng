@@ -142,6 +142,13 @@ pub enum EnhancedAction {
     DownloadFfmpeg {
         id: String,
     },
+    SetPictureInPicture {
+        enabled: bool,
+    },
+    StartPipDrag,
+    StartPipResize {
+        direction: u32,
+    },
 }
 
 /// Serialized plugin information for the web UI.

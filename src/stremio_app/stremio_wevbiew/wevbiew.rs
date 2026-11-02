@@ -520,8 +520,17 @@ fn trusted_origin(endpoint: &RefCell<Option<String>>) -> Option<url::Origin> {
 }
 
 fn same_origin(trusted: &Option<url::Origin>, uri: &str) -> bool {
+    let Ok(url) = url::Url::parse(uri) else {
+        return false;
+    };
+    if matches!(url.scheme(), "http" | "https")
+        && matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
+        && url.port() == Some(11470)
+    {
+        return true;
+    }
     match trusted {
-        Some(trusted) => url::Url::parse(uri).is_ok_and(|url| url.origin() == *trusted),
+        Some(trusted) => url.origin() == *trusted,
         None => false,
     }
 }

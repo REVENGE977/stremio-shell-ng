@@ -20,7 +20,7 @@ use winapi::{
         winbase::CREATE_BREAKAWAY_FROM_JOB,
         winuser::{
             GetWindowLongA, SetWindowPos, GWL_STYLE, SWP_NOACTIVATE, SWP_NOZORDER, WM_DPICHANGED,
-            WS_CAPTION, WS_EX_TOPMOST,
+            WM_NCCALCSIZE, WS_CAPTION, WS_EX_TOPMOST,
         },
     },
 };
@@ -83,6 +83,9 @@ pub struct MainWindow {
     pub release_candidate: bool,
     pub autoupdater_setup_file: Arc<Mutex<Option<PathBuf>>>,
     pub requested_fullscreen: Arc<Mutex<Option<bool>>>,
+    pub requested_pip: Arc<Mutex<Option<bool>>>,
+    pub requested_pip_resize: Arc<Mutex<Option<u32>>>,
+    pub pip_mode_active: Arc<std::sync::atomic::AtomicBool>,
     pub requested_cache_directory: Arc<Mutex<Option<CacheDirectoryRequest>>>,
     pub requested_interface_scale: Arc<Mutex<Option<u64>>>,
     pub saved_window_style: RefCell<WindowStyle>,
@@ -103,6 +106,7 @@ pub struct MainWindow {
         OnWindowClose: [Self::on_quit(SELF, EVT_DATA)],
         OnInit: [Self::on_init],
         OnPaint: [Self::on_paint],
+        OnResize: [Self::on_paint],
         OnMinMaxInfo: [Self::on_min_max(SELF, EVT_DATA)],
         OnWindowMinimize: [Self::transmit_window_state_change],
         OnWindowMaximize: [Self::on_window_state_changed],
@@ -155,6 +159,15 @@ pub struct MainWindow {
     #[nwg_control]
     #[nwg_events(OnNotice: [Self::on_server_stop_notice])]
     pub server_stop_notice: nwg::Notice,
+    #[nwg_control]
+    #[nwg_events(OnNotice: [Self::on_toggle_pip_notice])]
+    pub toggle_pip_notice: nwg::Notice,
+    #[nwg_control]
+    #[nwg_events(OnNotice: [Self::on_pip_drag_notice])]
+    pub pip_drag_notice: nwg::Notice,
+    #[nwg_control]
+    #[nwg_events(OnNotice: [Self::on_pip_resize_notice])]
+    pub pip_resize_notice: nwg::Notice,
 }
 
 impl MainWindow {
@@ -201,7 +214,11 @@ impl MainWindow {
         if let Some(hwnd) = self.window.handle.hwnd() {
             if let Ok(mut saved_style) = self.saved_window_style.try_borrow_mut() {
                 saved_style.set_title_bar_color(hwnd);
-                nwg::bind_raw_event_handler(&self.window.handle, 0x10001, |hwnd, msg, _w, l| {
+                let pip_mode_raw = self.pip_mode_active.clone();
+                nwg::bind_raw_event_handler(&self.window.handle, 0x10001, move |hwnd, msg, w, l| {
+                    if msg == WM_NCCALCSIZE && w != 0 && pip_mode_raw.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Some(0);
+                    }
                     if msg != WM_DPICHANGED
                         || unsafe { GetWindowLongA(hwnd, GWL_STYLE) } as u32 & WS_CAPTION == 0
                     {
@@ -374,6 +391,11 @@ impl MainWindow {
         let enhanced_app = self.enhanced.clone();
         let server_restart_sender = self.server_restart_notice.sender();
         let server_stop_sender = self.server_stop_notice.sender();
+        let requested_pip = self.requested_pip.clone();
+        let requested_pip_resize = self.requested_pip_resize.clone();
+        let toggle_pip_sender = self.toggle_pip_notice.sender();
+        let pip_drag_sender = self.pip_drag_notice.sender();
+        let pip_resize_sender = self.pip_resize_notice.sender();
 
         thread::spawn(move || loop {
             let Ok(raw) = web_rx.recv() else { break; };
@@ -538,6 +560,17 @@ impl MainWindow {
                             let script = format!("window.__receiveFfmpegResult && window.__receiveFfmpegResult({id:?}, {success});");
                             tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
                         });
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::SetPictureInPicture { enabled } => {
+                        *requested_pip.lock().unwrap() = Some(enabled);
+                        toggle_pip_sender.notice();
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::StartPipDrag => {
+                        pip_drag_sender.notice();
+                    }
+                    crate::stremio_app::enhanced::EnhancedAction::StartPipResize { direction } => {
+                        *requested_pip_resize.lock().unwrap() = Some(direction);
+                        pip_resize_sender.notice();
                     }
                 }
                 continue;
@@ -748,8 +781,12 @@ impl MainWindow {
         }); // thread
         if self.server.development() {
             self.load_webui(None);
-        } else {
+        } else if crate::stremio_app::stremio_server::is_streaming_server_online() {
+            self.load_webui(Some(crate::stremio_app::constants::DEV_ENDPOINT));
+        } else if crate::stremio_app::stremio_server::find_server_script().is_some() {
             self.server.start();
+        } else {
+            self.load_webui(None);
         }
     }
     fn load_webui(&self, server_url: Option<&str>) {
@@ -881,14 +918,18 @@ impl MainWindow {
             match event {
                 ServerEvent::Ready(endpoint) => self.load_webui(Some(&endpoint)),
                 ServerEvent::Failed(details) => {
-                    eprintln!("Streaming server unavailable: {details}");
-                    *self.local_server_url.lock().unwrap() = None;
-                    if let Some(sender) = self.open_media_sender.borrow().as_ref() {
-                        sender.send(OpenRequest::Reset).ok();
+                    if crate::stremio_app::stremio_server::is_streaming_server_online() {
+                        self.load_webui(Some(crate::stremio_app::constants::DEV_ENDPOINT));
+                    } else {
+                        eprintln!("Streaming server unavailable: {details}");
+                        *self.local_server_url.lock().unwrap() = None;
+                        if let Some(sender) = self.open_media_sender.borrow().as_ref() {
+                            sender.send(OpenRequest::Reset).ok();
+                        }
+                        // Instead of blocking with a modal error, fall back to Web UI so Enhanced UI
+                        // can load and guide the user through downloading server.js or using Stremio Service.
+                        self.load_webui(None);
                     }
-                    // Instead of blocking with a modal error, fall back to Web UI so Enhanced UI
-                    // can load and guide the user through downloading server.js or using Stremio Service.
-                    self.load_webui(None);
                 }
             }
         }
@@ -903,7 +944,17 @@ impl MainWindow {
     }
     fn on_min_max(&self, data: &nwg::EventData) {
         let data = data.on_min_max();
-        data.set_min_size(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT);
+        let is_pip = self.pip_mode_active.load(std::sync::atomic::Ordering::Relaxed)
+            || self
+                .saved_window_style
+                .try_borrow()
+                .map(|style| style.pip_mode)
+                .unwrap_or(false);
+        if is_pip {
+            data.set_min_size(280, 158);
+        } else {
+            data.set_min_size(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT);
+        }
     }
     fn on_paint(&self) {
         if !self.splash_screen.visible() {
@@ -918,7 +969,7 @@ impl MainWindow {
         if self
             .saved_window_style
             .try_borrow()
-            .map(|style| style.full_screen)
+            .map(|style| style.full_screen || style.pip_mode)
             .unwrap_or(false)
         {
             return;
@@ -938,14 +989,68 @@ impl MainWindow {
                     .unwrap()
                     .take()
                     .unwrap_or(!saved_style.full_screen);
+                if target && saved_style.pip_mode {
+                    self.pip_mode_active.store(false, std::sync::atomic::Ordering::Relaxed);
+                    saved_style.set_pip(hwnd, false);
+                    self.webview.execute_script(
+                        "window.__syncPipState && window.__syncPipState(false);".to_string(),
+                    );
+                }
                 saved_style.set_full_screen(hwnd, target);
                 self.tray.tray_topmost.set_enabled(!saved_style.full_screen);
                 self.tray
                     .tray_topmost
                     .set_checked((saved_style.ex_style as u32 & WS_EX_TOPMOST) == WS_EX_TOPMOST);
             }
+            self.webview.fit_to_window(Some(hwnd));
         }
         self.transmit_window_visibility_change();
+    }
+    fn on_toggle_pip_notice(&self) {
+        let mut pip_active = false;
+        if let Some(hwnd) = self.window.handle.hwnd() {
+            if let Ok(mut saved_style) = self.saved_window_style.try_borrow_mut() {
+                let target = self
+                    .requested_pip
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .unwrap_or(!saved_style.pip_mode);
+                self.pip_mode_active.store(target, std::sync::atomic::Ordering::Relaxed);
+                saved_style.set_pip(hwnd, target);
+                pip_active = saved_style.pip_mode;
+                self.pip_mode_active.store(pip_active, std::sync::atomic::Ordering::Relaxed);
+                self.tray
+                    .tray_topmost
+                    .set_enabled(!saved_style.full_screen && !saved_style.pip_mode);
+                self.tray.tray_topmost.set_checked(
+                    (saved_style.ex_style as u32 & WS_EX_TOPMOST) == WS_EX_TOPMOST
+                        || saved_style.pip_mode,
+                );
+            }
+            self.webview.fit_to_window(Some(hwnd));
+        }
+        self.webview.execute_script(format!(
+            "window.__syncPipState && window.__syncPipState({pip_active});"
+        ));
+        self.transmit_window_visibility_change();
+        self.transmit_window_state_change();
+    }
+    fn on_pip_drag_notice(&self) {
+        if let Some(hwnd) = self.window.handle.hwnd() {
+            if let Ok(saved_style) = self.saved_window_style.try_borrow() {
+                saved_style.start_pip_drag(hwnd);
+            }
+        }
+    }
+    fn on_pip_resize_notice(&self) {
+        let direction = self.requested_pip_resize.lock().unwrap().take();
+        if let (Some(hwnd), Some(direction)) = (self.window.handle.hwnd(), direction) {
+            if let Ok(saved_style) = self.saved_window_style.try_borrow() {
+                saved_style.start_pip_resize(hwnd, direction);
+            }
+            self.webview.fit_to_window(Some(hwnd));
+        }
     }
     fn on_set_interface_scale_notice(&self) {
         let scale = self.requested_interface_scale.lock().unwrap().take();
