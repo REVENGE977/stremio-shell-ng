@@ -337,6 +337,22 @@
         html.stremio-pip-mode .pip-plugin-button {
             color: var(--primary-accent-color, #7b5bf5) !important;
         }
+        html.stremio-pip-mode[data-pip-cursor="nwse-resize"],
+        html.stremio-pip-mode[data-pip-cursor="nwse-resize"] * {
+            cursor: nwse-resize !important;
+        }
+        html.stremio-pip-mode[data-pip-cursor="nesw-resize"],
+        html.stremio-pip-mode[data-pip-cursor="nesw-resize"] * {
+            cursor: nesw-resize !important;
+        }
+        html.stremio-pip-mode[data-pip-cursor="ew-resize"],
+        html.stremio-pip-mode[data-pip-cursor="ew-resize"] * {
+            cursor: ew-resize !important;
+        }
+        html.stremio-pip-mode[data-pip-cursor="ns-resize"],
+        html.stremio-pip-mode[data-pip-cursor="ns-resize"] * {
+            cursor: ns-resize !important;
+        }
     `;
     (document.head || document.documentElement || document.body).appendChild(style);
   }
@@ -2692,6 +2708,7 @@ Are you sure you want to update? It's recommended to read the source code of the
     } else {
       document.documentElement.classList.remove("stremio-pip-mode");
       document.documentElement.style.cursor = "";
+      delete document.documentElement.dataset.pipCursor;
     }
     if (notifyRust) {
       postEnhancedMessage("setPictureInPicture", { enabled: pipActive });
@@ -2753,7 +2770,6 @@ Are you sure you want to update? It's recommended to read the source code of the
       if (!pipActive || e.button !== 0) return;
       const resizeDir = getResizeDirection(e);
       if (resizeDir !== 0) {
-        e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
         return;
@@ -2793,7 +2809,13 @@ Are you sure you want to update? It's recommended to read the source code of the
       if (e.buttons === 0) {
         dragCandidate = false;
         const dir = getResizeDirection(e);
-        document.documentElement.style.cursor = cursorForDirection(dir);
+        const cursor = cursorForDirection(dir);
+        document.documentElement.style.cursor = cursor;
+        if (cursor) {
+          document.documentElement.dataset.pipCursor = cursor;
+        } else {
+          delete document.documentElement.dataset.pipCursor;
+        }
         return;
       }
       if ((e.buttons & 1) === 1 && dragCandidate) {

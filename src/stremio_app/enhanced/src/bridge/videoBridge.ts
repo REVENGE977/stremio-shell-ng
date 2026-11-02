@@ -29,6 +29,7 @@ function setPipState(enabled: boolean, notifyRust = true): void {
     } else {
         document.documentElement.classList.remove('stremio-pip-mode');
         document.documentElement.style.cursor = '';
+        delete document.documentElement.dataset.pipCursor;
     }
 
     if (notifyRust) {
@@ -101,7 +102,6 @@ function setupPipWindowInteractions(): void {
 
         const resizeDir = getResizeDirection(e);
         if (resizeDir !== 0) {
-            e.preventDefault();
             e.stopPropagation();
             e.stopImmediatePropagation();
             return;
@@ -152,7 +152,13 @@ function setupPipWindowInteractions(): void {
         if (e.buttons === 0) {
             dragCandidate = false;
             const dir = getResizeDirection(e);
-            document.documentElement.style.cursor = cursorForDirection(dir);
+            const cursor = cursorForDirection(dir);
+            document.documentElement.style.cursor = cursor;
+            if (cursor) {
+                document.documentElement.dataset.pipCursor = cursor;
+            } else {
+                delete document.documentElement.dataset.pipCursor;
+            }
             return;
         }
 

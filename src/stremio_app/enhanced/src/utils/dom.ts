@@ -177,6 +177,22 @@ export function injectFallbackStyles(): void {
         html.stremio-pip-mode .pip-plugin-button {
             color: var(--primary-accent-color, #7b5bf5) !important;
         }
+        html.stremio-pip-mode[data-pip-cursor="nwse-resize"],
+        html.stremio-pip-mode[data-pip-cursor="nwse-resize"] * {
+            cursor: nwse-resize !important;
+        }
+        html.stremio-pip-mode[data-pip-cursor="nesw-resize"],
+        html.stremio-pip-mode[data-pip-cursor="nesw-resize"] * {
+            cursor: nesw-resize !important;
+        }
+        html.stremio-pip-mode[data-pip-cursor="ew-resize"],
+        html.stremio-pip-mode[data-pip-cursor="ew-resize"] * {
+            cursor: ew-resize !important;
+        }
+        html.stremio-pip-mode[data-pip-cursor="ns-resize"],
+        html.stremio-pip-mode[data-pip-cursor="ns-resize"] * {
+            cursor: ns-resize !important;
+        }
     `;
     (document.head || document.documentElement || document.body).appendChild(style);
 }
