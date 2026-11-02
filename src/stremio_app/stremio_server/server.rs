@@ -43,11 +43,29 @@ pub fn ffmpeg_download_url() -> &'static str {
     }
 }
 
+fn clean_abs_path(path: PathBuf) -> PathBuf {
+    let abs = if path.is_absolute() {
+        path
+    } else if let Ok(cwd) = env::current_dir() {
+        cwd.join(path)
+    } else {
+        path
+    };
+    if let Ok(canon) = abs.canonicalize() {
+        let s = canon.to_string_lossy();
+        if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            return PathBuf::from(stripped);
+        }
+        return canon;
+    }
+    abs
+}
+
 pub fn find_shipped_bin_dir() -> Option<PathBuf> {
     if let Ok(mut app_dir) = env::current_exe() {
         app_dir.pop();
         if app_dir.join("ffmpeg.exe").exists() && app_dir.join("ffprobe.exe").exists() {
-            return Some(app_dir);
+            return Some(clean_abs_path(app_dir));
         }
     }
 
@@ -57,18 +75,18 @@ pub fn find_shipped_bin_dir() -> Option<PathBuf> {
         PathBuf::from("bin")
     };
     if dev_bin.join("ffmpeg.exe").exists() && dev_bin.join("ffprobe.exe").exists() {
-        return Some(dev_bin);
+        return Some(clean_abs_path(dev_bin));
     }
 
     None
 }
 
 pub fn is_ffmpeg_installed() -> bool {
-    let dir = server_dir();
-    if dir.join("ffmpeg.exe").exists() && dir.join("ffprobe.exe").exists() {
+    if find_shipped_bin_dir().is_some() {
         return true;
     }
-    find_shipped_bin_dir().is_some()
+    let dir = server_dir();
+    dir.join("ffmpeg.exe").exists() && dir.join("ffprobe.exe").exists()
 }
 
 pub fn cleanup_ffmpeg_leftovers(dir: &std::path::Path) {
@@ -107,6 +125,10 @@ pub fn cleanup_ffmpeg_leftovers(dir: &std::path::Path) {
 }
 
 pub fn download_and_extract_ffmpeg() -> Result<(), String> {
+    if find_shipped_bin_dir().is_some() {
+        return Ok(());
+    }
+
     let dir = server_dir();
     let _ = fs::create_dir_all(&dir);
 
@@ -229,7 +251,7 @@ pub fn find_runtime_exe() -> Result<PathBuf, String> {
         path.pop();
         let runtime = path.join("stremio-runtime.exe");
         if runtime.exists() {
-            return Ok(runtime);
+            return Ok(clean_abs_path(runtime));
         }
     }
 
@@ -239,7 +261,7 @@ pub fn find_runtime_exe() -> Result<PathBuf, String> {
         PathBuf::from("bin").join("stremio-runtime.exe")
     };
     if dev_bin.exists() {
-        return Ok(dev_bin);
+        return Ok(clean_abs_path(dev_bin));
     }
 
     Ok(PathBuf::from("node"))
@@ -313,14 +335,16 @@ fn server_command() -> Result<Command, String> {
         .current_dir(&s_dir)
         .creation_flags(CREATE_NO_WINDOW);
 
-    let mut path_entries = vec![s_dir.display().to_string()];
-    if let Some(shipped) = find_shipped_bin_dir() {
-        if let Ok(abs) = shipped.canonicalize() {
-            path_entries.push(abs.display().to_string());
-        } else {
-            path_entries.push(shipped.display().to_string());
-        }
+    let mut path_entries = Vec::new();
+    if let Some(bin_dir) = find_shipped_bin_dir() {
+        command.env("FFMPEG_BIN", bin_dir.join("ffmpeg.exe"));
+        command.env("FFPROBE_BIN", bin_dir.join("ffprobe.exe"));
+        path_entries.push(bin_dir.display().to_string());
+    } else if s_dir.join("ffmpeg.exe").exists() && s_dir.join("ffprobe.exe").exists() {
+        command.env("FFMPEG_BIN", s_dir.join("ffmpeg.exe"));
+        command.env("FFPROBE_BIN", s_dir.join("ffprobe.exe"));
     }
+    path_entries.push(s_dir.display().to_string());
     if let Ok(path_var) = env::var("PATH") {
         path_entries.push(path_var);
     }

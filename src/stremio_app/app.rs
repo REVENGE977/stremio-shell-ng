@@ -433,8 +433,14 @@ impl MainWindow {
                         server_restart_sender.notice();
                         let tx = webview_cmd_tx.clone();
                         thread::spawn(move || {
-                            thread::sleep(time::Duration::from_millis(1000));
-                            let running = crate::stremio_app::stremio_server::is_streaming_server_online();
+                            let mut running = false;
+                            for _ in 0..40 {
+                                thread::sleep(time::Duration::from_millis(250));
+                                if crate::stremio_app::stremio_server::is_streaming_server_online() {
+                                    running = true;
+                                    break;
+                                }
+                            }
                             let script = format!("window.__receiveServerStartResult && window.__receiveServerStartResult({id:?}, {running});");
                             tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
                         });
@@ -783,7 +789,9 @@ impl MainWindow {
             self.load_webui(None);
         } else if crate::stremio_app::stremio_server::is_streaming_server_online() {
             self.load_webui(Some(crate::stremio_app::constants::DEV_ENDPOINT));
-        } else if crate::stremio_app::stremio_server::find_server_script().is_some() {
+        } else if crate::stremio_app::stremio_server::find_server_script().is_some()
+            && crate::stremio_app::stremio_server::is_ffmpeg_installed()
+        {
             self.server.start();
         } else {
             self.load_webui(None);
@@ -916,7 +924,13 @@ impl MainWindow {
     fn on_server_notice(&self) {
         for event in self.server.events() {
             match event {
-                ServerEvent::Ready(endpoint) => self.load_webui(Some(&endpoint)),
+                ServerEvent::Ready(endpoint) => {
+                    if self.webui_ready.get() {
+                        *self.local_server_url.lock().unwrap() = Some(endpoint);
+                    } else {
+                        self.load_webui(Some(&endpoint));
+                    }
+                }
                 ServerEvent::Failed(details) => {
                     if crate::stremio_app::stremio_server::is_streaming_server_online() {
                         self.load_webui(Some(crate::stremio_app::constants::DEV_ENDPOINT));

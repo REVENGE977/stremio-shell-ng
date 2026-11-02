@@ -1192,7 +1192,7 @@
       }
     }, 500);
   }
-  function startStreamingServer() {
+  function startStreamingServer(autoReload = true) {
     return new Promise((resolve) => {
       const id = "start_" + Math.random().toString(36).substring(2, 9);
       const timer = setTimeout(() => {
@@ -1203,7 +1203,7 @@
       }, 15e3);
       pendingServerStartRequests.set(id, (success) => {
         clearTimeout(timer);
-        if (success && window.location.hostname !== "127.0.0.1") {
+        if (autoReload && success && window.location.hostname !== "127.0.0.1") {
           reloadToLocalStreamingServer();
         }
         resolve(success);
@@ -1238,26 +1238,25 @@
       return null;
     }
   }
-  var isDownloadingFfmpeg = false;
+  var activeFfmpegDownload = null;
   function downloadFfmpeg() {
-    if (isDownloadingFfmpeg) return Promise.resolve(false);
-    isDownloadingFfmpeg = true;
+    if (activeFfmpegDownload) return activeFfmpegDownload;
     modalManager.showToast(
       "ffmpeg-downloading",
       "FFmpeg Setup",
-      "Downloading FFmpeg in background for streaming server...",
+      "Downloading and extracting FFmpeg for streaming server. Please wait...",
       "info"
     );
-    return new Promise((resolve) => {
+    activeFfmpegDownload = new Promise((resolve) => {
       const id = "ff_" + Math.random().toString(36).substring(2, 9);
       const timer = setTimeout(() => {
-        isDownloadingFfmpeg = false;
+        activeFfmpegDownload = null;
         pendingFfmpegRequests.delete(id);
         resolve(false);
       }, 3e5);
       pendingFfmpegRequests.set(id, (success) => {
         clearTimeout(timer);
-        isDownloadingFfmpeg = false;
+        activeFfmpegDownload = null;
         if (success) {
           if (currentServerStatus) {
             currentServerStatus.ffmpegInstalled = true;
@@ -1280,6 +1279,7 @@
       });
       postEnhancedMessage("downloadFfmpeg", { id });
     });
+    return activeFfmpegDownload;
   }
   async function showMissingServerInstructions(downloadUrl, serverDir) {
     let serverReady = false;
@@ -1329,7 +1329,7 @@ When ready, click "Done / Check".`,
               await downloadFfmpeg();
             }
             console.log("[Enhanced Server] server.js found. Starting streaming server...");
-            const started = await startStreamingServer();
+            const started = await startStreamingServer(false);
             if (started) {
               await modalManager.showAlert(
                 "info",
@@ -1401,8 +1401,12 @@ Please place server.js in the folder or start Stremio Service. Would you like to
             return;
           }
         } else if (status.exists) {
-          console.log("[Enhanced Server] server.js exists but is not running. Starting streaming server...");
-          const started = await startStreamingServer();
+          if (!status.ffmpegInstalled) {
+            console.log("[Enhanced Server] FFmpeg not installed in streamingserver folder. Downloading FFmpeg first...");
+            await downloadFfmpeg();
+          }
+          console.log("[Enhanced Server] server.js exists. Starting streaming server...");
+          const started = await startStreamingServer(false);
           if (started && window.location.hostname !== "127.0.0.1") {
             reloadToLocalStreamingServer();
             return;
