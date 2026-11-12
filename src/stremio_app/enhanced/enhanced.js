@@ -1259,8 +1259,8 @@
     if (activeFfmpegDownload) return activeFfmpegDownload;
     modalManager.showToast(
       "ffmpeg-downloading",
-      "FFmpeg Setup",
-      "Downloading and extracting FFmpeg for streaming server. Please wait...",
+      "FFmpeg Check",
+      "Checking FFmpeg availability for the streaming server...",
       "info"
     );
     activeFfmpegDownload = new Promise((resolve) => {
@@ -1269,7 +1269,7 @@
         activeFfmpegDownload = null;
         pendingFfmpegRequests.delete(id);
         resolve(false);
-      }, 3e5);
+      }, 3e4);
       pendingFfmpegRequests.set(id, (success) => {
         clearTimeout(timer);
         activeFfmpegDownload = null;
@@ -1280,14 +1280,14 @@
           modalManager.showToast(
             "ffmpeg-ready",
             "FFmpeg Ready",
-            "FFmpeg was installed successfully into the streaming server folder.",
+            "FFmpeg is available for the streaming server.",
             "info"
           );
         } else {
           modalManager.showToast(
             "ffmpeg-failed",
-            "FFmpeg Error",
-            "Failed to download FFmpeg automatically.",
+            "FFmpeg Missing",
+            "ffmpeg.exe and ffprobe.exe were not found. Please reinstall Stremio Enhanced or place them in the streamingserver folder.",
             "fail"
           );
         }
@@ -1418,7 +1418,7 @@ Please place server.js in the folder or start Stremio Service. Would you like to
           }
         } else if (status.exists) {
           if (!status.ffmpegInstalled) {
-            console.log("[Enhanced Server] FFmpeg not installed in streamingserver folder. Downloading FFmpeg first...");
+            console.log("[Enhanced Server] FFmpeg not detected automatically. Checking availability before starting...");
             await downloadFfmpeg();
           }
           console.log("[Enhanced Server] server.js exists. Starting streaming server...");

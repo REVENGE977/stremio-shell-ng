@@ -1,14 +1,11 @@
 use native_windows_derive::NwgUi;
 use native_windows_gui as nwg;
-use rand::Rng;
 use serde_json;
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
     io::Read,
-    os::windows::process::CommandExt,
     path::PathBuf,
-    process::{self, Command},
     str,
     sync::{Arc, Mutex},
     thread, time,
@@ -16,24 +13,23 @@ use std::{
 use url::Url;
 use winapi::{
     shared::windef::RECT,
-    um::{
-        winbase::CREATE_BREAKAWAY_FROM_JOB,
-        winuser::{
-            GetWindowLongA, SetWindowPos, GWL_STYLE, SWP_NOACTIVATE, SWP_NOZORDER, WM_DPICHANGED,
-            WM_NCCALCSIZE, WS_CAPTION, WS_EX_TOPMOST,
-        },
+    um::winuser::{
+        GetWindowLongA, SetWindowPos, GWL_STYLE, SWP_NOACTIVATE, SWP_NOZORDER, WM_DPICHANGED,
+        WM_NCCALCSIZE, WS_CAPTION, WS_EX_TOPMOST,
     },
 };
 
 use crate::stremio_app::{
     constants::{
-        safe_url, web_endpoint_with_streaming_server, APP_NAME, UPDATE_ENDPOINT, UPDATE_INTERVAL,
-        WEB_ENDPOINT, WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH,
+        is_trusted_shell_navigation_url, safe_url, web_endpoint_with_streaming_server, APP_NAME,
+        UPDATE_INTERVAL, WEB_ENDPOINT, WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH,
     },
+    enhanced::{theme_injection_script, EnhancedAction, EnhancedManager},
     ipc::{CacheDirectoryRequest, RPCRequest, RPCResponse},
     splash::SplashImage,
     stremio_player::Player,
-    stremio_wevbiew::WebView,
+    stremio_server::{ensure_ffmpeg_available, is_streaming_server_online, ServerEvent, StremioServer},
+    stremio_wevbiew::{WebView, WebViewCommand},
     systray::SystemTray,
     updater,
     window_helper::WindowStyle,
@@ -42,7 +38,6 @@ use crate::stremio_app::{
 };
 
 use super::discord::DiscordRpc;
-use super::stremio_server::{ServerEvent, StremioServer};
 
 const WEBUI_RETRY_DELAYS_SECS: [u64; 2] = [2, 5];
 const WEBUI_READY_TIMEOUT_SECS: u64 = 30;
@@ -80,6 +75,7 @@ pub struct MainWindow {
     pub start_hidden: bool,
     pub autoupdater_endpoint: Option<Url>,
     pub force_update: bool,
+    #[allow(dead_code)]
     pub release_candidate: bool,
     pub autoupdater_setup_file: Arc<Mutex<Option<PathBuf>>>,
     pub requested_fullscreen: Arc<Mutex<Option<bool>>>,
@@ -266,528 +262,67 @@ impl MainWindow {
             .as_ref()
             .expect("Cannont obtain communication channel for the Web UI");
         let web_tx_player = web_tx.clone();
-        let web_tx_web = web_tx.clone();
-        let web_tx_open = web_tx.clone();
-        let web_tx_upd = web_tx.clone();
         let web_rx = web_rx.clone();
 
         let (updater_tx, updater_rx) = flume::unbounded::<String>();
-        let updater_tx_web = updater_tx.clone();
-
         let (open_sender, open_receiver) = flume::unbounded();
-        let open_sender_web = open_sender.clone();
         *self.open_media_sender.borrow_mut() = Some(open_sender.clone());
-        let command = self.command.clone();
+
+        spawn_open_media_worker(self.command.clone(), open_receiver, web_tx.clone());
+        spawn_updater_worker(
+            self.autoupdater_endpoint.clone(),
+            self.force_update,
+            self.autoupdater_setup_file.clone(),
+            updater_rx,
+            web_tx.clone(),
+        );
+
+        // Single application IPC
+        if let Some(listener) = self.commands_server.borrow_mut().take() {
+            spawn_single_instance_listener(listener, self.focus_notice.sender(), open_sender.clone());
+        }
+
+        // Forward messages from player to WebView
         thread::spawn(move || {
-            let mut ready = false;
-            let mut pending = (!command.is_empty()).then_some(command);
-            for request in open_receiver {
-                match request {
-                    OpenRequest::Input(input) => pending = Some(input),
-                    OpenRequest::Ready => ready = true,
-                    OpenRequest::Reset => ready = false,
-                }
-                if ready {
-                    if let Some(input) = pending.take() {
-                        let message = super::open_media::message(&input);
-                        web_tx_open
-                            .send(RPCResponse::response_message(Some(message)))
-                            .ok();
-                    }
-                }
+            for msg in player_rx.iter() {
+                web_tx_player.send(msg).ok();
             }
         });
 
-        let autoupdater_endpoint = self.autoupdater_endpoint.clone();
-        let force_update = self.force_update;
-        let release_candidate = self.release_candidate;
-        let autoupdater_setup_file = self.autoupdater_setup_file.clone();
+        let bridge = IpcBridgeContext {
+            web_tx: web_tx.clone(),
+            player_tx,
+            updater_tx,
+            open_sender,
+            webview_cmd_tx: self.webview.get_command_sender(),
+            enhanced: self.enhanced.clone(),
+            discord_rpc: DiscordRpc::new(web_tx.clone()),
+            toggle_fullscreen_sender: self.toggle_fullscreen_notice.sender(),
+            set_interface_scale_sender: self.set_interface_scale_notice.sender(),
+            quit_sender: self.quit_notice.sender(),
+            hide_splash_sender: self.hide_splash_notice.sender(),
+            focus_sender: self.focus_notice.sender(),
+            cache_directory_sender: self.cache_directory_notice.sender(),
+            webui_sender: self.webui_notice.sender(),
+            server_restart_sender: self.server_restart_notice.sender(),
+            server_stop_sender: self.server_stop_notice.sender(),
+            toggle_pip_sender: self.toggle_pip_notice.sender(),
+            pip_drag_sender: self.pip_drag_notice.sender(),
+            pip_resize_sender: self.pip_resize_notice.sender(),
+            autoupdater_setup_file: self.autoupdater_setup_file.clone(),
+            requested_fullscreen: self.requested_fullscreen.clone(),
+            requested_cache_directory: self.requested_cache_directory.clone(),
+            local_server_url: self.local_server_url.clone(),
+            requested_interface_scale: self.requested_interface_scale.clone(),
+            webui_events: self.webui_events.clone(),
+            requested_pip: self.requested_pip.clone(),
+            requested_pip_resize: self.requested_pip_resize.clone(),
+        };
+        spawn_ipc_bridge(web_rx, bridge);
 
-        thread::spawn(move || {
-            loop {
-                if let Ok(msg) = updater_rx.recv() {
-                    if msg == "check_for_update" {
-                        break;
-                    }
-                }
-            }
-
-            loop {
-                let current_version = env!("CARGO_PKG_VERSION")
-                    .parse()
-                    .expect("Should always be valid");
-
-                let updater_endpoint = if let Some(ref endpoint) = autoupdater_endpoint {
-                    endpoint.clone()
-                } else {
-                    let mut rng = rand::thread_rng();
-                    let index = rng.gen_range(0..UPDATE_ENDPOINT.len());
-                    let mut url = Url::parse(UPDATE_ENDPOINT[index]).unwrap();
-                    url.query_pairs_mut().append_pair("arch", env!("ARCH"));
-                    if release_candidate {
-                        url.query_pairs_mut().append_pair("rc", "true");
-                    }
-                    url
-                };
-
-                let updater =
-                    updater::Updater::new(current_version, &updater_endpoint, force_update);
-                match updater.autoupdate() {
-                    Ok(Some(update)) => {
-                        println!("New version ready to install v{}", update.version);
-                        let mut autoupdater_setup_file = autoupdater_setup_file.lock().unwrap();
-                        *autoupdater_setup_file = Some(update.file.clone());
-                        web_tx_upd.send(RPCResponse::update_available()).ok();
-                    }
-                    Ok(None) => println!("No new updates found"),
-                    Err(e) => eprintln!("Failed to fetch updates: {e}"),
-                }
-
-                thread::sleep(time::Duration::from_secs(UPDATE_INTERVAL));
-            }
-        }); // thread
-
-        // Single application IPC
-        if let Some(mut listener) = self.commands_server.borrow_mut().take() {
-            let focus_sender = self.focus_notice.sender();
-            thread::spawn(move || loop {
-                if let Ok(mut stream) = listener.accept() {
-                    let mut buf = vec![];
-                    stream.read_to_end(&mut buf).ok();
-                    if let Ok(s) = str::from_utf8(&buf) {
-                        focus_sender.notice();
-                        if !s.is_empty() {
-                            open_sender.send(OpenRequest::Input(s.to_string())).ok();
-                        }
-                    }
-                }
-            });
-        }
-
-        // Read message from player
-        thread::spawn(move || loop {
-            player_rx
-                .iter()
-                .map(|msg| web_tx_player.send(msg))
-                .for_each(drop);
-        }); // thread
-
-        let toggle_fullscreen_sender = self.toggle_fullscreen_notice.sender();
-        let set_interface_scale_sender = self.set_interface_scale_notice.sender();
-        let quit_sender = self.quit_notice.sender();
-        let hide_splash_sender = self.hide_splash_notice.sender();
-        let focus_sender = self.focus_notice.sender();
-        let autoupdater_setup_mutex = self.autoupdater_setup_file.clone();
-
-        let discord_rpc = DiscordRpc::new(web_tx.clone());
-        let requested_fullscreen = self.requested_fullscreen.clone();
-        let requested_cache_directory = self.requested_cache_directory.clone();
-        let cache_directory_sender = self.cache_directory_notice.sender();
-        let local_server_url = self.local_server_url.clone();
-        let requested_interface_scale = self.requested_interface_scale.clone();
-        let webui_events = self.webui_events.clone();
-        let webui_sender = self.webui_notice.sender();
-        let webview_cmd_tx = self.webview.get_command_sender();
-        let enhanced_app = self.enhanced.clone();
-        let server_restart_sender = self.server_restart_notice.sender();
-        let server_stop_sender = self.server_stop_notice.sender();
-        let requested_pip = self.requested_pip.clone();
-        let requested_pip_resize = self.requested_pip_resize.clone();
-        let toggle_pip_sender = self.toggle_pip_notice.sender();
-        let pip_drag_sender = self.pip_drag_notice.sender();
-        let pip_resize_sender = self.pip_resize_notice.sender();
-
-        thread::spawn(move || loop {
-            let Ok(raw) = web_rx.recv() else { break; };
-
-            if let Ok(action) = serde_json::from_str::<crate::stremio_app::enhanced::EnhancedAction>(&raw) {
-                match action {
-                    crate::stremio_app::enhanced::EnhancedAction::GetData => {
-                        let mut mgr = enhanced_app.lock().unwrap();
-                        mgr.reload();
-                        let running = crate::stremio_app::stremio_server::is_streaming_server_online();
-                        let data = mgr.ui_data(running);
-                        if let Ok(json) = serde_json::to_string(&data) {
-                            let script = format!("window.__receiveEnhancedData && window.__receiveEnhancedData({json});");
-                            webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
-                        }
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::OpenThemesFolder => {
-                        enhanced_app.lock().unwrap().open_themes_folder();
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::OpenPluginsFolder => {
-                        enhanced_app.lock().unwrap().open_plugins_folder();
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::OpenStreamingServerFolder => {
-                        enhanced_app.lock().unwrap().open_streaming_server_folder();
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::GetServerStatus { id } => {
-                        let running = crate::stremio_app::stremio_server::is_streaming_server_online();
-                        let status = enhanced_app.lock().unwrap().get_server_status(running);
-                        if let Ok(json) = serde_json::to_string(&status) {
-                            let script = format!("window.__receiveServerStatus && window.__receiveServerStatus({id:?}, {json});");
-                            webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
-                        }
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::StartStreamingServer { id } => {
-                        server_restart_sender.notice();
-                        let tx = webview_cmd_tx.clone();
-                        thread::spawn(move || {
-                            let mut running = false;
-                            for _ in 0..40 {
-                                thread::sleep(time::Duration::from_millis(250));
-                                if crate::stremio_app::stremio_server::is_streaming_server_online() {
-                                    running = true;
-                                    break;
-                                }
-                            }
-                            let script = format!("window.__receiveServerStartResult && window.__receiveServerStartResult({id:?}, {running});");
-                            tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
-                        });
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::LoadUrl { url } => {
-                        webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::Navigate(url)).ok();
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::PrepareServerUpdate { version } => {
-                        server_stop_sender.notice();
-                        if let Err(e) = enhanced_app.lock().unwrap().prepare_server_update(&version) {
-                            eprintln!("Failed to prepare server update: {e}");
-                        }
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::SkipServerVersion { version } => {
-                        if let Err(e) = enhanced_app.lock().unwrap().skip_server_version(&version) {
-                            eprintln!("Failed to skip server version: {e}");
-                        }
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::TogglePlugin { file_name, enabled } => {
-                        let mut mgr = enhanced_app.lock().unwrap();
-                        mgr.toggle_plugin(&file_name, enabled);
-                        let running = crate::stremio_app::stremio_server::is_streaming_server_online();
-                        let data = mgr.ui_data(running);
-                        if let Ok(json) = serde_json::to_string(&data) {
-                            let script = format!("window.__receiveEnhancedData && window.__receiveEnhancedData({json});");
-                            webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
-                        }
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::ApplyTheme { file_name } => {
-                        let mut mgr = enhanced_app.lock().unwrap();
-                        let new_theme = if file_name == "Default" {
-                            None
-                        } else {
-                            Some(file_name.as_str())
-                        };
-                        let css = mgr.set_active_theme(new_theme);
-                        let css_json = serde_json::to_string(&css.unwrap_or_default()).unwrap_or_else(|_| "\"\"".to_string());
-                        let theme_script = format!(r##"
-                            (function() {{
-                                try {{
-                                    var s = document.getElementById('activeTheme') || document.createElement('style');
-                                    s.id = 'activeTheme';
-                                    s.textContent = {css_json};
-                                    (document.head || document.documentElement).appendChild(s);
-                                }} catch(e) {{}}
-                            }})();
-                        "##);
-                        webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(theme_script)).ok();
-                        let running = crate::stremio_app::stremio_server::is_streaming_server_online();
-                        let data = mgr.ui_data(running);
-                        if let Ok(json) = serde_json::to_string(&data) {
-                            let script = format!("window.__receiveEnhancedData && window.__receiveEnhancedData({json});");
-                            webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
-                        }
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::Log { level, message } => {
-                        match level.as_str() {
-                            "error" => eprintln!("[Enhanced ERROR] {message}"),
-                            "warn" => eprintln!("[Enhanced WARN] {message}"),
-                            _ => println!("[Enhanced INFO] {message}"),
-                        }
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::HttpGet { id, url } => {
-                        let tx = webview_cmd_tx.clone();
-                        thread::spawn(move || {
-                            match crate::stremio_app::enhanced::http_get(&url) {
-                                Ok((status, body)) => {
-                                    let body_json = serde_json::to_string(&body).unwrap_or_else(|_| "\"\"".to_string());
-                                    let script = format!("window.__receiveHttpResponse && window.__receiveHttpResponse({id:?}, {status}, {body_json});");
-                                    tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
-                                }
-                                Err(err) => {
-                                    eprintln!("HttpGet failed for {url}: {err}");
-                                    let err_json = serde_json::to_string(&err).unwrap_or_else(|_| "\"Error\"".to_string());
-                                    let script = format!("window.__receiveHttpResponse && window.__receiveHttpResponse({id:?}, 500, {err_json});");
-                                    tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
-                                }
-                            }
-                        });
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::InstallMod { mod_type, file_name, content } => {
-                        let mut mgr = enhanced_app.lock().unwrap();
-                        if let Err(e) = mgr.install_mod(&mod_type, &file_name, &content) {
-                            eprintln!("Failed to install mod {file_name}: {e}");
-                        }
-                        let running = crate::stremio_app::stremio_server::is_streaming_server_online();
-                        let data = mgr.ui_data(running);
-                        if let Ok(json) = serde_json::to_string(&data) {
-                            let script = format!("window.__receiveEnhancedData && window.__receiveEnhancedData({json});");
-                            webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
-                        }
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::DeleteMod { mod_type, file_name } => {
-                        let mut mgr = enhanced_app.lock().unwrap();
-                        if let Err(e) = mgr.delete_mod(&mod_type, &file_name) {
-                            eprintln!("Failed to delete mod {file_name}: {e}");
-                        }
-                        let css = mgr.active_theme().map(|t| t.content.clone());
-                        let css_json = serde_json::to_string(&css.unwrap_or_default()).unwrap_or_else(|_| "\"\"".to_string());
-                        let theme_script = format!(r##"
-                            (function() {{
-                                try {{
-                                    var s = document.getElementById('activeTheme') || document.createElement('style');
-                                    s.id = 'activeTheme';
-                                    s.textContent = {css_json};
-                                    (document.head || document.documentElement).appendChild(s);
-                                }} catch(e) {{}}
-                            }})();
-                        "##);
-                        webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(theme_script)).ok();
-                        let running = crate::stremio_app::stremio_server::is_streaming_server_online();
-                        let data = mgr.ui_data(running);
-                        if let Ok(json) = serde_json::to_string(&data) {
-                            let script = format!("window.__receiveEnhancedData && window.__receiveEnhancedData({json});");
-                            webview_cmd_tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
-                        }
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::DownloadFfmpeg { id } => {
-                        let tx = webview_cmd_tx.clone();
-                        thread::spawn(move || {
-                            let res = crate::stremio_app::stremio_server::download_and_extract_ffmpeg();
-                            let success = res.is_ok();
-                            let script = format!("window.__receiveFfmpegResult && window.__receiveFfmpegResult({id:?}, {success});");
-                            tx.send(crate::stremio_app::stremio_wevbiew::WebViewCommand::ExecuteScript(script)).ok();
-                        });
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::SetPictureInPicture { enabled } => {
-                        *requested_pip.lock().unwrap() = Some(enabled);
-                        toggle_pip_sender.notice();
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::StartPipDrag => {
-                        pip_drag_sender.notice();
-                    }
-                    crate::stremio_app::enhanced::EnhancedAction::StartPipResize { direction } => {
-                        *requested_pip_resize.lock().unwrap() = Some(direction);
-                        pip_resize_sender.notice();
-                    }
-                }
-                continue;
-            }
-
-            if let Ok(msg) = serde_json::from_str::<RPCRequest>(&raw) {
-                let local_server_url = local_server_url.lock().unwrap().clone();
-                match msg.get_method() {
-                    // The handshake. Here we send some useful data to the WEB UI
-                    None if msg.is_handshake() => {
-                        web_tx_web
-                            .send(RPCResponse::get_handshake(local_server_url.as_deref()))
-                            .ok();
-                    }
-                    Some("pick-cache-directory") => {
-                        if let Some(request) = msg.get_params().and_then(|params| {
-                            serde_json::from_value::<CacheDirectoryRequest>(params.clone()).ok()
-                        }) {
-                            let mut pending = requested_cache_directory.lock().unwrap();
-                            let error = if local_server_url.as_deref()
-                                != Some(request.server_url.as_str())
-                            {
-                                Some("The folder picker is only available for the shell's local server")
-                            } else if pending.is_some() {
-                                Some("A folder picker is already open")
-                            } else {
-                                None
-                            };
-                            if let Some(error) = error {
-                                web_tx_web
-                                    .send(RPCResponse::cache_directory_selected(
-                                        request.request_id,
-                                        Err(error.to_owned()),
-                                    ))
-                                    .ok();
-                            } else {
-                                *pending = Some(request);
-                                cache_directory_sender.notice();
-                            }
-                        }
-                    }
-                    Some("win-set-interface-scale") => {
-                        if let Some(scale) = msg
-                            .get_params()
-                            .and_then(|params| params.get("scale"))
-                            .and_then(|value| value.as_u64())
-                            .filter(|scale| (75..=175).contains(scale))
-                        {
-                            *requested_interface_scale.lock().unwrap() = Some(scale);
-                            set_interface_scale_sender.notice();
-                        }
-                    }
-                    Some("win-set-visibility") => {
-                        if let Some(fullscreen) = msg
-                            .get_params()
-                            .and_then(|params| params.get("fullscreen"))
-                            .and_then(|value| value.as_bool())
-                        {
-                            *requested_fullscreen.lock().unwrap() = Some(fullscreen);
-                            toggle_fullscreen_sender.notice();
-                        }
-                    }
-                    Some("quit") => quit_sender.notice(),
-                    Some("app-ready") => {
-                        send_webui_event(&webui_events, &webui_sender, WebUiEvent::Ready);
-                        hide_splash_sender.notice();
-                        web_tx_web
-                            .send(RPCResponse::visibility_change(true, 1, false))
-                            .ok();
-                        updater_tx_web
-                            .send("check_for_update".to_owned())
-                            .expect("Failed to send value to updater channel");
-
-                        open_sender_web.send(OpenRequest::Ready).ok();
-                    }
-                    Some("app-load-error") => {
-                        if let Some(arg) = msg.get_params() {
-                            let detail = arg.as_str().unwrap_or_default().to_owned();
-                            send_webui_event(
-                                &webui_events,
-                                &webui_sender,
-                                WebUiEvent::LoadFailed(detail),
-                            );
-                        }
-                    }
-                    Some("app-error") => {
-                        hide_splash_sender.notice();
-                        if let Some(arg) = msg.get_params() {
-                            // TODO: Make this modal dialog
-                            eprintln!("Web App Error: {arg}");
-                        }
-                    }
-                    Some("open-external") => {
-                        if let Some(arg) = msg.get_params() {
-                            // FIXME: THIS IS NOT SAFE BY ANY MEANS
-                            // open::that("calc").ok(); does exactly that
-                            let arg = arg.as_str().unwrap_or("");
-                            let arg_lc = arg.to_lowercase();
-                            if arg_lc.starts_with("http://")
-                                || arg_lc.starts_with("https://")
-                                || arg_lc.starts_with("rtp://")
-                                || arg_lc.starts_with("rtps://")
-                                || arg_lc.starts_with("ftp://")
-                                || arg_lc.starts_with("ipfs://")
-                            {
-                                if let Some(url) = safe_url(arg) {
-                                    open::that(url).ok();
-                                }
-                            }
-                        }
-                    }
-                    Some("play-external") => {
-                        if let Some(arg) = msg.get_params().and_then(|value| value.as_str()) {
-                            if let Err(error) = crate::stremio_app::external_player::play(arg) {
-                                eprintln!("External player request failed: {error}");
-                            }
-                        }
-                    }
-                    Some("win-focus") => {
-                        focus_sender.notice();
-                    }
-                    Some("autoupdater-notif-clicked") => {
-                        // We've shown the "Update Available" notification
-                        // and the user clicked on "Restart And Update"
-                        let autoupdater_setup_file =
-                            autoupdater_setup_mutex.lock().unwrap().clone();
-                        match autoupdater_setup_file {
-                            Some(file_path) => {
-                                println!("Running the setup at {file_path:?}");
-
-                                let command = Command::new(file_path)
-                                    .args([
-                                        "/SILENT",
-                                        "/NOCANCEL",
-                                        "/FORCECLOSEAPPLICATIONS",
-                                        "/TASKS=runapp",
-                                    ])
-                                    .creation_flags(CREATE_BREAKAWAY_FROM_JOB)
-                                    .stdin(process::Stdio::null())
-                                    .stdout(process::Stdio::null())
-                                    .stderr(process::Stdio::null())
-                                    .spawn();
-
-                                match command {
-                                    Ok(process) => {
-                                        println!("Updater started. (PID {:?})", process.id());
-                                        quit_sender.notice();
-                                    }
-                                    Err(err) => eprintln!("Updater couldn't be started: {err}"),
-                                };
-                            }
-                            _ => {
-                                println!("Cannot obtain the setup file path");
-                            }
-                        }
-                    }
-                    Some("discord-connect") => {
-                        if let Err(e) = discord_rpc.connect() {
-                            eprintln!("Discord connect error: {}", e);
-                            web_tx_web.send(RPCResponse::discord_status(false)).ok();
-                        }
-                    }
-                    Some("discord-disconnect") => {
-                        if let Err(e) = discord_rpc.disconnect() {
-                            eprintln!("Discord disconnect error: {}", e);
-                        }
-                        web_tx_web.send(RPCResponse::discord_status(false)).ok();
-                    }
-                    Some("discord-set-activity") => {
-                        if let Some(params) = msg.get_params() {
-                            let state = params.get("state").and_then(|v| v.as_str()).unwrap_or("");
-                            let details =
-                                params.get("details").and_then(|v| v.as_str()).unwrap_or("");
-                            let image = params.get("image").and_then(|v| v.as_str());
-                            let start_timestamp =
-                                params.get("startTimestamp").and_then(|v| v.as_i64());
-                            let end_timestamp = params.get("endTimestamp").and_then(|v| v.as_i64());
-
-                            if let Err(e) = discord_rpc.set_activity(
-                                state,
-                                details,
-                                image,
-                                start_timestamp,
-                                end_timestamp,
-                            ) {
-                                eprintln!("Discord set activity error: {}", e);
-                            }
-                        }
-                    }
-                    Some("discord-clear-activity") => {
-                        if let Err(e) = discord_rpc.clear_activity() {
-                            eprintln!("Discord clear activity error: {}", e);
-                        }
-                    }
-                    Some(player_command) if player_command.starts_with("mpv-") => {
-                        let resp_json = serde_json::to_string(
-                            &msg.args.expect("Cannot have method without args"),
-                        )
-                        .expect("Cannot build response");
-                        player_tx.send(resp_json).ok();
-                    }
-                    Some(unknown) => {
-                        eprintln!("Unsupported command {}({:?})", unknown, msg.get_params())
-                    }
-                    None => {}
-                }
-            }
-        }); // thread
         if self.server.development() {
             self.load_webui(None);
-        } else if crate::stremio_app::stremio_server::is_streaming_server_online() {
+        } else if is_streaming_server_online() {
             self.load_webui(Some(crate::stremio_app::constants::DEV_ENDPOINT));
         } else if crate::stremio_app::stremio_server::find_server_script().is_some()
             && crate::stremio_app::stremio_server::is_ffmpeg_installed()
@@ -1162,5 +697,494 @@ impl MainWindow {
     fn on_exit(&self) {
         self.save_window_settings();
         nwg::stop_thread_dispatch();
+    }
+}
+
+struct IpcBridgeContext {
+    web_tx: flume::Sender<String>,
+    player_tx: flume::Sender<String>,
+    updater_tx: flume::Sender<String>,
+    open_sender: flume::Sender<OpenRequest>,
+    webview_cmd_tx: flume::Sender<WebViewCommand>,
+    enhanced: Arc<Mutex<EnhancedManager>>,
+    discord_rpc: DiscordRpc,
+    toggle_fullscreen_sender: nwg::NoticeSender,
+    set_interface_scale_sender: nwg::NoticeSender,
+    quit_sender: nwg::NoticeSender,
+    hide_splash_sender: nwg::NoticeSender,
+    focus_sender: nwg::NoticeSender,
+    cache_directory_sender: nwg::NoticeSender,
+    webui_sender: nwg::NoticeSender,
+    server_restart_sender: nwg::NoticeSender,
+    server_stop_sender: nwg::NoticeSender,
+    toggle_pip_sender: nwg::NoticeSender,
+    pip_drag_sender: nwg::NoticeSender,
+    pip_resize_sender: nwg::NoticeSender,
+    autoupdater_setup_file: Arc<Mutex<Option<PathBuf>>>,
+    requested_fullscreen: Arc<Mutex<Option<bool>>>,
+    requested_cache_directory: Arc<Mutex<Option<CacheDirectoryRequest>>>,
+    local_server_url: Arc<Mutex<Option<String>>>,
+    requested_interface_scale: Arc<Mutex<Option<u64>>>,
+    webui_events: WebUiEvents,
+    requested_pip: Arc<Mutex<Option<bool>>>,
+    requested_pip_resize: Arc<Mutex<Option<u32>>>,
+}
+
+fn spawn_open_media_worker(
+    initial_command: String,
+    open_receiver: flume::Receiver<OpenRequest>,
+    web_tx: flume::Sender<String>,
+) {
+    thread::spawn(move || {
+        let mut ready = false;
+        let mut pending = (!initial_command.is_empty()).then_some(initial_command);
+        for request in open_receiver {
+            match request {
+                OpenRequest::Input(input) => pending = Some(input),
+                OpenRequest::Ready => ready = true,
+                OpenRequest::Reset => ready = false,
+            }
+            if ready {
+                if let Some(input) = pending.take() {
+                    let message = super::open_media::message(&input);
+                    web_tx.send(RPCResponse::response_message(Some(message))).ok();
+                }
+            }
+        }
+    });
+}
+
+fn spawn_updater_worker(
+    autoupdater_endpoint: Option<Url>,
+    force_update: bool,
+    autoupdater_setup_file: Arc<Mutex<Option<PathBuf>>>,
+    updater_rx: flume::Receiver<String>,
+    web_tx: flume::Sender<String>,
+) {
+    let Some(endpoint) = autoupdater_endpoint else {
+        return;
+    };
+    thread::spawn(move || {
+        for msg in updater_rx.iter() {
+            if msg == "check_for_update" {
+                break;
+            }
+        }
+
+        let current_version: semver::Version = env!("CARGO_PKG_VERSION")
+            .parse()
+            .expect("Should always be valid");
+
+        loop {
+            let updater = updater::Updater::new(current_version.clone(), &endpoint, force_update);
+            match updater.autoupdate() {
+                Ok(Some(update)) => {
+                    println!("New version ready to install v{}", update.version);
+                    *autoupdater_setup_file.lock().unwrap() = Some(update.file);
+                    web_tx.send(RPCResponse::update_available()).ok();
+                }
+                Ok(None) => println!("No new updates found"),
+                Err(e) => eprintln!("Failed to fetch updates: {e}"),
+            }
+
+            thread::sleep(time::Duration::from_secs(UPDATE_INTERVAL));
+        }
+    });
+}
+
+fn spawn_single_instance_listener(
+    mut listener: PipeServer,
+    focus_sender: nwg::NoticeSender,
+    open_sender: flume::Sender<OpenRequest>,
+) {
+    thread::spawn(move || loop {
+        if let Ok(mut stream) = listener.accept() {
+            let mut buf = vec![];
+            stream.read_to_end(&mut buf).ok();
+            if let Ok(s) = str::from_utf8(&buf) {
+                focus_sender.notice();
+                if !s.is_empty() {
+                    open_sender.send(OpenRequest::Input(s.to_string())).ok();
+                }
+            }
+        }
+    });
+}
+
+fn spawn_ipc_bridge(web_rx: flume::Receiver<String>, ctx: IpcBridgeContext) {
+    thread::spawn(move || {
+        while let Ok(raw) = web_rx.recv() {
+            if let Ok(action) = serde_json::from_str::<EnhancedAction>(&raw) {
+                handle_enhanced_action(action, &ctx);
+                continue;
+            }
+            if let Ok(msg) = serde_json::from_str::<RPCRequest>(&raw) {
+                handle_rpc_request(msg, &ctx);
+            }
+        }
+    });
+}
+
+fn send_enhanced_ui_data(mgr: &EnhancedManager, webview_cmd_tx: &flume::Sender<WebViewCommand>) {
+    let running = is_streaming_server_online();
+    let data = mgr.ui_data(running);
+    if let Ok(json) = serde_json::to_string(&data) {
+        let script = format!("window.__receiveEnhancedData && window.__receiveEnhancedData({json});");
+        webview_cmd_tx
+            .send(WebViewCommand::ExecuteScript(script))
+            .ok();
+    }
+}
+
+fn send_js_callback(
+    webview_cmd_tx: &flume::Sender<WebViewCommand>,
+    fn_name: &str,
+    args_json: &[String],
+) {
+    let args = args_json.join(", ");
+    let script = format!("window.{fn_name} && window.{fn_name}({args});");
+    webview_cmd_tx
+        .send(WebViewCommand::ExecuteScript(script))
+        .ok();
+}
+
+fn handle_enhanced_action(action: EnhancedAction, ctx: &IpcBridgeContext) {
+    match action {
+        EnhancedAction::GetData => {
+            let mut mgr = ctx.enhanced.lock().unwrap();
+            mgr.reload();
+            send_enhanced_ui_data(&mgr, &ctx.webview_cmd_tx);
+        }
+        EnhancedAction::OpenThemesFolder => {
+            ctx.enhanced.lock().unwrap().open_themes_folder();
+        }
+        EnhancedAction::OpenPluginsFolder => {
+            ctx.enhanced.lock().unwrap().open_plugins_folder();
+        }
+        EnhancedAction::OpenStreamingServerFolder => {
+            ctx.enhanced.lock().unwrap().open_streaming_server_folder();
+        }
+        EnhancedAction::GetServerStatus { id } => {
+            let running = is_streaming_server_online();
+            let status = ctx.enhanced.lock().unwrap().get_server_status(running);
+            if let (Ok(id_json), Ok(status_json)) =
+                (serde_json::to_string(&id), serde_json::to_string(&status))
+            {
+                send_js_callback(
+                    &ctx.webview_cmd_tx,
+                    "__receiveServerStatus",
+                    &[id_json, status_json],
+                );
+            }
+        }
+        EnhancedAction::StartStreamingServer { id } => {
+            ctx.server_restart_sender.notice();
+            let tx = ctx.webview_cmd_tx.clone();
+            thread::spawn(move || {
+                let mut running = false;
+                for _ in 0..40 {
+                    thread::sleep(time::Duration::from_millis(250));
+                    if is_streaming_server_online() {
+                        running = true;
+                        break;
+                    }
+                }
+                if let Ok(id_json) = serde_json::to_string(&id) {
+                    send_js_callback(
+                        &tx,
+                        "__receiveServerStartResult",
+                        &[id_json, running.to_string()],
+                    );
+                }
+            });
+        }
+        EnhancedAction::LoadUrl { url } => {
+            if is_trusted_shell_navigation_url(&url) {
+                ctx.webview_cmd_tx.send(WebViewCommand::Navigate(url)).ok();
+            } else {
+                eprintln!("[Enhanced] Blocked navigation to untrusted URL: {url}");
+            }
+        }
+        EnhancedAction::PrepareServerUpdate { version } => {
+            ctx.server_stop_sender.notice();
+            if let Err(e) = ctx.enhanced.lock().unwrap().prepare_server_update(&version) {
+                eprintln!("Failed to prepare server update: {e}");
+            }
+        }
+        EnhancedAction::SkipServerVersion { version } => {
+            if let Err(e) = ctx.enhanced.lock().unwrap().skip_server_version(&version) {
+                eprintln!("Failed to skip server version: {e}");
+            }
+        }
+        EnhancedAction::TogglePlugin { file_name, enabled } => {
+            let mut mgr = ctx.enhanced.lock().unwrap();
+            mgr.toggle_plugin(&file_name, enabled);
+            send_enhanced_ui_data(&mgr, &ctx.webview_cmd_tx);
+        }
+        EnhancedAction::ApplyTheme { file_name } => {
+            let mut mgr = ctx.enhanced.lock().unwrap();
+            let new_theme = (file_name != "Default").then_some(file_name.as_str());
+            let css = mgr.set_active_theme(new_theme);
+            let theme_script = theme_injection_script(css.as_deref());
+            ctx.webview_cmd_tx
+                .send(WebViewCommand::ExecuteScript(theme_script))
+                .ok();
+            send_enhanced_ui_data(&mgr, &ctx.webview_cmd_tx);
+        }
+        EnhancedAction::Log { level, message } => match level.as_str() {
+            "error" => eprintln!("[Enhanced ERROR] {message}"),
+            "warn" => eprintln!("[Enhanced WARN] {message}"),
+            _ => println!("[Enhanced INFO] {message}"),
+        },
+        EnhancedAction::HttpGet { id, url } => {
+            let tx = ctx.webview_cmd_tx.clone();
+            thread::spawn(move || {
+                let Ok(id_json) = serde_json::to_string(&id) else {
+                    return;
+                };
+                match crate::stremio_app::enhanced::http_get(&url) {
+                    Ok((status, body)) => {
+                        let body_json =
+                            serde_json::to_string(&body).unwrap_or_else(|_| "\"\"".to_string());
+                        send_js_callback(
+                            &tx,
+                            "__receiveHttpResponse",
+                            &[id_json, status.to_string(), body_json],
+                        );
+                    }
+                    Err(err) => {
+                        eprintln!("HttpGet failed for {url}: {err}");
+                        let err_json =
+                            serde_json::to_string(&err).unwrap_or_else(|_| "\"Error\"".to_string());
+                        send_js_callback(
+                            &tx,
+                            "__receiveHttpResponse",
+                            &[id_json, "500".to_string(), err_json],
+                        );
+                    }
+                }
+            });
+        }
+        EnhancedAction::InstallMod {
+            mod_type,
+            file_name,
+            content,
+        } => {
+            let mut mgr = ctx.enhanced.lock().unwrap();
+            if let Err(e) = mgr.install_mod(&mod_type, &file_name, &content) {
+                eprintln!("Failed to install mod {file_name}: {e}");
+            }
+            send_enhanced_ui_data(&mgr, &ctx.webview_cmd_tx);
+        }
+        EnhancedAction::DeleteMod {
+            mod_type,
+            file_name,
+        } => {
+            let mut mgr = ctx.enhanced.lock().unwrap();
+            if let Err(e) = mgr.delete_mod(&mod_type, &file_name) {
+                eprintln!("Failed to delete mod {file_name}: {e}");
+            }
+            let css = mgr.active_theme().map(|t| t.content.as_str());
+            let theme_script = theme_injection_script(css);
+            ctx.webview_cmd_tx
+                .send(WebViewCommand::ExecuteScript(theme_script))
+                .ok();
+            send_enhanced_ui_data(&mgr, &ctx.webview_cmd_tx);
+        }
+        EnhancedAction::DownloadFfmpeg { id } => {
+            let tx = ctx.webview_cmd_tx.clone();
+            thread::spawn(move || {
+                let success = ensure_ffmpeg_available().is_ok();
+                if let Ok(id_json) = serde_json::to_string(&id) {
+                    send_js_callback(&tx, "__receiveFfmpegResult", &[id_json, success.to_string()]);
+                }
+            });
+        }
+        EnhancedAction::SetPictureInPicture { enabled } => {
+            *ctx.requested_pip.lock().unwrap() = Some(enabled);
+            ctx.toggle_pip_sender.notice();
+        }
+        EnhancedAction::StartPipDrag => {
+            ctx.pip_drag_sender.notice();
+        }
+        EnhancedAction::StartPipResize { direction } => {
+            *ctx.requested_pip_resize.lock().unwrap() = Some(direction);
+            ctx.pip_resize_sender.notice();
+        }
+    }
+}
+
+fn handle_rpc_request(msg: RPCRequest, ctx: &IpcBridgeContext) {
+    let local_server_url = ctx.local_server_url.lock().unwrap().clone();
+    match msg.get_method() {
+        // The handshake. Here we send some useful data to the WEB UI
+        None if msg.is_handshake() => {
+            ctx.web_tx
+                .send(RPCResponse::get_handshake(local_server_url.as_deref()))
+                .ok();
+        }
+        Some("pick-cache-directory") => {
+            if let Some(request) = msg
+                .get_params()
+                .and_then(|params| serde_json::from_value::<CacheDirectoryRequest>(params.clone()).ok())
+            {
+                let mut pending = ctx.requested_cache_directory.lock().unwrap();
+                let error = if local_server_url.as_deref() != Some(request.server_url.as_str()) {
+                    Some("The folder picker is only available for the shell's local server")
+                } else if pending.is_some() {
+                    Some("A folder picker is already open")
+                } else {
+                    None
+                };
+                if let Some(error) = error {
+                    ctx.web_tx
+                        .send(RPCResponse::cache_directory_selected(
+                            request.request_id,
+                            Err(error.to_owned()),
+                        ))
+                        .ok();
+                } else {
+                    *pending = Some(request);
+                    ctx.cache_directory_sender.notice();
+                }
+            }
+        }
+        Some("win-set-interface-scale") => {
+            if let Some(scale) = msg
+                .get_params()
+                .and_then(|params| params.get("scale"))
+                .and_then(|value| value.as_u64())
+                .filter(|scale| (75..=175).contains(scale))
+            {
+                *ctx.requested_interface_scale.lock().unwrap() = Some(scale);
+                ctx.set_interface_scale_sender.notice();
+            }
+        }
+        Some("win-set-visibility") => {
+            if let Some(fullscreen) = msg
+                .get_params()
+                .and_then(|params| params.get("fullscreen"))
+                .and_then(|value| value.as_bool())
+            {
+                *ctx.requested_fullscreen.lock().unwrap() = Some(fullscreen);
+                ctx.toggle_fullscreen_sender.notice();
+            }
+        }
+        Some("quit") => ctx.quit_sender.notice(),
+        Some("app-ready") => {
+            send_webui_event(&ctx.webui_events, &ctx.webui_sender, WebUiEvent::Ready);
+            ctx.hide_splash_sender.notice();
+            ctx.web_tx
+                .send(RPCResponse::visibility_change(true, 1, false))
+                .ok();
+            ctx.updater_tx.send("check_for_update".to_owned()).ok();
+            ctx.open_sender.send(OpenRequest::Ready).ok();
+        }
+        Some("app-load-error") => {
+            if let Some(arg) = msg.get_params() {
+                let detail = arg.as_str().unwrap_or_default().to_owned();
+                send_webui_event(
+                    &ctx.webui_events,
+                    &ctx.webui_sender,
+                    WebUiEvent::LoadFailed(detail),
+                );
+            }
+        }
+        Some("app-error") => {
+            ctx.hide_splash_sender.notice();
+            if let Some(arg) = msg.get_params() {
+                eprintln!("Web App Error: {arg}");
+            }
+        }
+        Some("open-external") => {
+            if let Some(arg) = msg.get_params() {
+                let arg = arg.as_str().unwrap_or("");
+                let arg_lc = arg.to_lowercase();
+                if arg_lc.starts_with("http://")
+                    || arg_lc.starts_with("https://")
+                    || arg_lc.starts_with("rtp://")
+                    || arg_lc.starts_with("rtps://")
+                    || arg_lc.starts_with("ftp://")
+                    || arg_lc.starts_with("ipfs://")
+                {
+                    if let Some(url) = safe_url(arg) {
+                        open::that(url).ok();
+                    }
+                }
+            }
+        }
+        Some("play-external") => {
+            if let Some(arg) = msg.get_params().and_then(|value| value.as_str()) {
+                if let Err(error) = crate::stremio_app::external_player::play(arg) {
+                    eprintln!("External player request failed: {error}");
+                }
+            }
+        }
+        Some("win-focus") => {
+            ctx.focus_sender.notice();
+        }
+        Some("autoupdater-notif-clicked") => {
+            let setup_file = ctx.autoupdater_setup_file.lock().unwrap().clone();
+            if let Some(file_path) = setup_file {
+                if file_path.is_file() {
+                    println!("Opening installer at {file_path:?}");
+                    match open::that(&file_path) {
+                        Ok(()) => ctx.quit_sender.notice(),
+                        Err(err) => eprintln!("Updater couldn't be started: {err}"),
+                    }
+                } else {
+                    eprintln!("Update installer file does not exist: {file_path:?}");
+                }
+            } else {
+                println!("Cannot obtain the setup file path");
+            }
+        }
+        Some("discord-connect") => {
+            if let Err(e) = ctx.discord_rpc.connect() {
+                eprintln!("Discord connect error: {e}");
+                ctx.web_tx.send(RPCResponse::discord_status(false)).ok();
+            }
+        }
+        Some("discord-disconnect") => {
+            if let Err(e) = ctx.discord_rpc.disconnect() {
+                eprintln!("Discord disconnect error: {e}");
+            }
+            ctx.web_tx.send(RPCResponse::discord_status(false)).ok();
+        }
+        Some("discord-set-activity") => {
+            if let Some(params) = msg.get_params() {
+                let state = params.get("state").and_then(|v| v.as_str()).unwrap_or("");
+                let details = params.get("details").and_then(|v| v.as_str()).unwrap_or("");
+                let image = params.get("image").and_then(|v| v.as_str());
+                let start_timestamp = params.get("startTimestamp").and_then(|v| v.as_i64());
+                let end_timestamp = params.get("endTimestamp").and_then(|v| v.as_i64());
+
+                if let Err(e) = ctx.discord_rpc.set_activity(
+                    state,
+                    details,
+                    image,
+                    start_timestamp,
+                    end_timestamp,
+                ) {
+                    eprintln!("Discord set activity error: {e}");
+                }
+            }
+        }
+        Some("discord-clear-activity") => {
+            if let Err(e) = ctx.discord_rpc.clear_activity() {
+                eprintln!("Discord clear activity error: {e}");
+            }
+        }
+        Some(player_command) if player_command.starts_with("mpv-") => {
+            if let Some(args) = msg.args {
+                if let Ok(resp_json) = serde_json::to_string(&args) {
+                    ctx.player_tx.send(resp_json).ok();
+                }
+            }
+        }
+        Some(unknown) => {
+            eprintln!("Unsupported command {}({:?})", unknown, msg.get_params())
+        }
+        None => {}
     }
 }

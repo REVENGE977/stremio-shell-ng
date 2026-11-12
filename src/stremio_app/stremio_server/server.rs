@@ -1,7 +1,13 @@
 use super::process::{ServerEvent, ServerProcess};
 use crate::stremio_app::constants::STREMIO_SERVER_DEV_MODE;
 use native_windows_gui::{self as nwg, PartialUi};
-use std::{env, fs, os::windows::process::CommandExt, process::Command, time::Duration};
+use std::{
+    env, fs,
+    os::windows::process::CommandExt,
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
 use winapi::um::winbase::CREATE_NO_WINDOW;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -12,35 +18,10 @@ pub struct StremioServer {
     process: std::cell::RefCell<Option<ServerProcess>>,
 }
 
-use std::path::PathBuf;
-
 pub fn server_dir() -> PathBuf {
-    let dir = if let Some(cfg) = dirs::config_dir() {
-        cfg.join("stremio-enhanced").join("streamingserver")
-    } else if let Some(home) = dirs::home_dir() {
-        home.join("AppData").join("Roaming").join("stremio-enhanced").join("streamingserver")
-    } else {
-        PathBuf::from("streamingserver")
-    };
+    let dir = crate::stremio_app::enhanced::base_dir().join("streamingserver");
     let _ = fs::create_dir_all(&dir);
-    cleanup_ffmpeg_leftovers(&dir);
     dir
-}
-
-pub fn ffmpeg_download_url() -> &'static str {
-    #[cfg(target_arch = "aarch64")]
-    {
-        "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-winarm64-gpl.zip"
-    }
-    #[cfg(not(target_arch = "aarch64"))]
-    {
-        if let Ok(arch) = env::var("PROCESSOR_ARCHITECTURE") {
-            if arch.eq_ignore_ascii_case("ARM64") {
-                return "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-winarm64-gpl.zip";
-            }
-        }
-        "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-    }
 }
 
 fn clean_abs_path(path: PathBuf) -> PathBuf {
@@ -61,155 +42,71 @@ fn clean_abs_path(path: PathBuf) -> PathBuf {
     abs
 }
 
+fn arch_bin_dir_name() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "bin-arm64"
+    } else {
+        "bin"
+    }
+}
+
+fn has_ffmpeg_pair(dir: &Path) -> bool {
+    dir.join("ffmpeg.exe").is_file() && dir.join("ffprobe.exe").is_file()
+}
+
 pub fn find_shipped_bin_dir() -> Option<PathBuf> {
+    let arch_dir = arch_bin_dir_name();
     if let Ok(mut app_dir) = env::current_exe() {
         app_dir.pop();
-        if app_dir.join("ffmpeg.exe").exists() && app_dir.join("ffprobe.exe").exists() {
+        if has_ffmpeg_pair(&app_dir) {
             return Some(clean_abs_path(app_dir));
+        }
+        let app_sub_bin = app_dir.join(arch_dir);
+        if has_ffmpeg_pair(&app_sub_bin) {
+            return Some(clean_abs_path(app_sub_bin));
         }
     }
 
-    let dev_bin = if cfg!(target_arch = "aarch64") {
-        PathBuf::from("bin-arm64")
-    } else {
-        PathBuf::from("bin")
-    };
-    if dev_bin.join("ffmpeg.exe").exists() && dev_bin.join("ffprobe.exe").exists() {
+    let dev_bin = PathBuf::from(arch_dir);
+    if has_ffmpeg_pair(&dev_bin) {
         return Some(clean_abs_path(dev_bin));
     }
 
     None
 }
 
+pub fn find_ffmpeg_in_path() -> Option<PathBuf> {
+    let path_var = env::var_os("PATH")?;
+    env::split_paths(&path_var)
+        .find(|dir| has_ffmpeg_pair(dir))
+        .map(clean_abs_path)
+}
+
+pub fn find_ffmpeg_bin_dir() -> Option<PathBuf> {
+    if let Some(shipped) = find_shipped_bin_dir() {
+        return Some(shipped);
+    }
+    let dir = server_dir();
+    if has_ffmpeg_pair(&dir) {
+        return Some(clean_abs_path(dir));
+    }
+    find_ffmpeg_in_path()
+}
+
 pub fn is_ffmpeg_installed() -> bool {
-    if find_shipped_bin_dir().is_some() {
-        return true;
-    }
-    let dir = server_dir();
-    dir.join("ffmpeg.exe").exists() && dir.join("ffprobe.exe").exists()
+    find_ffmpeg_bin_dir().is_some()
 }
 
-pub fn cleanup_ffmpeg_leftovers(dir: &std::path::Path) {
-    let ffmpeg_exe = dir.join("ffmpeg.exe");
-    let ffprobe_exe = dir.join("ffprobe.exe");
-    let bin_dir = dir.join("bin");
-
-    if bin_dir.exists() {
-        let bin_ffmpeg = bin_dir.join("ffmpeg.exe");
-        let bin_ffprobe = bin_dir.join("ffprobe.exe");
-        if !ffmpeg_exe.exists() && bin_ffmpeg.exists() {
-            let _ = fs::rename(&bin_ffmpeg, &ffmpeg_exe);
-        }
-        if !ffprobe_exe.exists() && bin_ffprobe.exists() {
-            let _ = fs::rename(&bin_ffprobe, &ffprobe_exe);
-        }
-        if ffmpeg_exe.exists() && ffprobe_exe.exists() {
-            let _ = fs::remove_dir_all(&bin_dir);
-        }
-    }
-
-    let doc_dir = dir.join("doc");
-    if doc_dir.exists() {
-        let _ = fs::remove_dir_all(&doc_dir);
-    }
-
-    let presets_dir = dir.join("presets");
-    if presets_dir.exists() {
-        let _ = fs::remove_dir_all(&presets_dir);
-    }
-
-    let license_file = dir.join("LICENSE.txt");
-    if license_file.exists() {
-        let _ = fs::remove_file(&license_file);
-    }
-}
-
-pub fn download_and_extract_ffmpeg() -> Result<(), String> {
-    if find_shipped_bin_dir().is_some() {
-        return Ok(());
-    }
-
-    let dir = server_dir();
-    let _ = fs::create_dir_all(&dir);
-
-    let ffmpeg_exe = dir.join("ffmpeg.exe");
-    let ffprobe_exe = dir.join("ffprobe.exe");
-
-    cleanup_ffmpeg_leftovers(&dir);
-
-    if ffmpeg_exe.exists() && ffprobe_exe.exists() {
-        return Ok(());
-    }
-
-    let url = ffmpeg_download_url();
-    println!("[FFmpeg] Downloading FFmpeg from {url} to {}...", dir.display());
-
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
-
-    let response = client
-        .get(url)
-        .header("User-Agent", "stremio-shell-ng")
-        .send()
-        .map_err(|e| format!("Failed to download FFmpeg archive: {e}"))?;
-
-    if !response.status().is_success() {
-        return Err(format!("FFmpeg download returned status {}", response.status()));
-    }
-
-    let bytes = response.bytes().map_err(|e| format!("Failed to read FFmpeg bytes: {e}"))?;
-    println!("[FFmpeg] Download completed ({} bytes). Extracting binaries...", bytes.len());
-
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let temp_dir = std::env::temp_dir().join(format!("stremio_ffmpeg_{}_{}", std::process::id(), millis));
-    let _ = fs::create_dir_all(&temp_dir);
-
-    let cursor = std::io::Cursor::new(bytes);
-    let extract_result = zip_extract::extract(cursor, &temp_dir, true);
-    if let Err(e) = extract_result {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return Err(format!("Failed to extract FFmpeg zip: {e}"));
-    }
-
-    find_and_move_binary(&temp_dir, "ffmpeg.exe", &ffmpeg_exe);
-    find_and_move_binary(&temp_dir, "ffprobe.exe", &ffprobe_exe);
-
-    let _ = fs::remove_dir_all(&temp_dir);
-    cleanup_ffmpeg_leftovers(&dir);
-
-    if ffmpeg_exe.exists() && ffprobe_exe.exists() {
-        println!("[FFmpeg] FFmpeg setup complete: {}", ffmpeg_exe.display());
+/// Checks whether FFmpeg binaries (`ffmpeg.exe` and `ffprobe.exe`) are available
+/// in the shipped application directory, streaming server directory, or `PATH`.
+pub fn ensure_ffmpeg_available() -> Result<(), String> {
+    if is_ffmpeg_installed() {
         Ok(())
     } else {
-        Err("Archive did not contain ffmpeg.exe and ffprobe.exe".to_string())
-    }
-}
-
-fn find_and_move_binary(dir: &std::path::Path, filename: &str, dest: &std::path::Path) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.eq_ignore_ascii_case(filename) {
-                        if fs::rename(&path, dest).is_err() {
-                            let _ = fs::copy(&path, dest);
-                        }
-                        return;
-                    }
-                }
-            } else if path.is_dir() {
-                find_and_move_binary(&path, filename, dest);
-                if dest.exists() {
-                    return;
-                }
-            }
-        }
+        Err(format!(
+            "ffmpeg.exe and ffprobe.exe were not found. Reinstall Stremio Enhanced or place them in {}",
+            server_dir().display()
+        ))
     }
 }
 
@@ -247,19 +144,20 @@ pub fn find_server_script() -> Option<PathBuf> {
 }
 
 pub fn find_runtime_exe() -> Result<PathBuf, String> {
+    let arch_dir = arch_bin_dir_name();
     if let Ok(mut path) = env::current_exe() {
         path.pop();
         let runtime = path.join("stremio-runtime.exe");
         if runtime.exists() {
             return Ok(clean_abs_path(runtime));
         }
+        let sub_runtime = path.join(arch_dir).join("stremio-runtime.exe");
+        if sub_runtime.exists() {
+            return Ok(clean_abs_path(sub_runtime));
+        }
     }
 
-    let dev_bin = if cfg!(target_arch = "aarch64") {
-        PathBuf::from("bin-arm64").join("stremio-runtime.exe")
-    } else {
-        PathBuf::from("bin").join("stremio-runtime.exe")
-    };
+    let dev_bin = PathBuf::from(arch_dir).join("stremio-runtime.exe");
     if dev_bin.exists() {
         return Ok(clean_abs_path(dev_bin));
     }
@@ -316,17 +214,32 @@ impl StremioServer {
     }
 }
 
+fn apply_ffmpeg_env(command: &mut Command, s_dir: &Path, bin_dir: &Path) {
+    command.env("FFMPEG_BIN", bin_dir.join("ffmpeg.exe"));
+    command.env("FFPROBE_BIN", bin_dir.join("ffprobe.exe"));
+
+    let mut path_entries = vec![
+        bin_dir.display().to_string(),
+        s_dir.display().to_string(),
+    ];
+    if let Ok(path_var) = env::var("PATH") {
+        path_entries.push(path_var);
+    }
+    command.env("PATH", path_entries.join(";"));
+}
+
 fn server_command() -> Result<Command, String> {
     super::job::protect_shell()
         .map_err(|error| format!("Cannot supervise Stremio child processes: {error}"))?;
     let runtime = find_runtime_exe()?;
     let server_js = find_server_script()
         .ok_or_else(|| "server.js not found in expected locations".to_string())?;
-
-    if !is_ffmpeg_installed() {
-        println!("[StreamingServer] ffmpeg missing, downloading ffmpeg...");
-        let _ = download_and_extract_ffmpeg();
-    }
+    let bin_dir = find_ffmpeg_bin_dir().ok_or_else(|| {
+        format!(
+            "ffmpeg.exe and ffprobe.exe were not found. Reinstall Stremio Enhanced or place them in {}",
+            server_dir().display()
+        )
+    })?;
 
     let s_dir = server_dir();
     let mut command = Command::new(runtime);
@@ -334,21 +247,7 @@ fn server_command() -> Result<Command, String> {
         .arg(&server_js)
         .current_dir(&s_dir)
         .creation_flags(CREATE_NO_WINDOW);
-
-    let mut path_entries = Vec::new();
-    if let Some(bin_dir) = find_shipped_bin_dir() {
-        command.env("FFMPEG_BIN", bin_dir.join("ffmpeg.exe"));
-        command.env("FFPROBE_BIN", bin_dir.join("ffprobe.exe"));
-        path_entries.push(bin_dir.display().to_string());
-    } else if s_dir.join("ffmpeg.exe").exists() && s_dir.join("ffprobe.exe").exists() {
-        command.env("FFMPEG_BIN", s_dir.join("ffmpeg.exe"));
-        command.env("FFPROBE_BIN", s_dir.join("ffprobe.exe"));
-    }
-    path_entries.push(s_dir.display().to_string());
-    if let Ok(path_var) = env::var("PATH") {
-        path_entries.push(path_var);
-    }
-    command.env("PATH", path_entries.join(";"));
+    apply_ffmpeg_env(&mut command, &s_dir, &bin_dir);
 
     Ok(command)
 }
@@ -382,28 +281,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_cleanup_ffmpeg_leftovers() {
-        let temp = std::env::temp_dir().join(format!("test_ffmpeg_clean_{}", rand::random::<u32>()));
+    fn test_has_ffmpeg_pair() {
+        let temp = std::env::temp_dir().join(format!("test_ffmpeg_pair_{}", rand::random::<u32>()));
         let _ = fs::create_dir_all(&temp);
-        let bin = temp.join("bin");
-        let doc = temp.join("doc");
-        let presets = temp.join("presets");
-        let license = temp.join("LICENSE.txt");
-        let _ = fs::create_dir_all(&bin);
-        let _ = fs::create_dir_all(&doc);
-        let _ = fs::create_dir_all(&presets);
-        let _ = fs::write(&license, "license");
-        let _ = fs::write(bin.join("ffmpeg.exe"), "bin_ffmpeg");
-        let _ = fs::write(bin.join("ffprobe.exe"), "bin_ffprobe");
+        assert!(!has_ffmpeg_pair(&temp));
 
-        cleanup_ffmpeg_leftovers(&temp);
-        assert!(temp.join("ffmpeg.exe").exists());
-        assert!(temp.join("ffprobe.exe").exists());
-        assert!(!bin.exists());
-        assert!(!doc.exists());
-        assert!(!presets.exists());
-        assert!(!license.exists());
+        fs::write(temp.join("ffmpeg.exe"), b"ffmpeg").unwrap();
+        assert!(!has_ffmpeg_pair(&temp));
+
+        fs::write(temp.join("ffprobe.exe"), b"ffprobe").unwrap();
+        assert!(has_ffmpeg_pair(&temp));
 
         let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_apply_ffmpeg_env_uses_bundled_bin() {
+        let bin_dir = find_shipped_bin_dir().expect("bundled bin dir should exist in workspace");
+        assert!(bin_dir.join("ffmpeg.exe").is_file());
+        assert!(bin_dir.join("ffprobe.exe").is_file());
+
+        let mut cmd = Command::new(find_runtime_exe().unwrap());
+        let s_dir = server_dir();
+        apply_ffmpeg_env(&mut cmd, &s_dir, &bin_dir);
+
+        let envs: std::collections::HashMap<_, _> = cmd
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_str()?.to_string(), v?.to_str()?.to_string())))
+            .collect();
+        assert_eq!(
+            envs.get("FFMPEG_BIN").map(PathBuf::from),
+            Some(bin_dir.join("ffmpeg.exe"))
+        );
+        assert_eq!(
+            envs.get("FFPROBE_BIN").map(PathBuf::from),
+            Some(bin_dir.join("ffprobe.exe"))
+        );
+        assert!(envs
+            .get("PATH")
+            .is_some_and(|p| p.starts_with(&bin_dir.display().to_string())));
     }
 }

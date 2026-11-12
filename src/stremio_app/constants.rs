@@ -12,11 +12,6 @@ pub const STA_ENDPOINT: &str = "https://staging.strem.io/";
 pub const WINDOW_MIN_WIDTH: i32 = 1000;
 pub const WINDOW_MIN_HEIGHT: i32 = 600;
 pub const UPDATE_INTERVAL: u64 = 12 * 60 * 60;
-pub const UPDATE_ENDPOINT: [&str; 3] = [
-    "https://www.strem.io/updater/check?product=stremio-shell-ng",
-    "https://www.stremio.com/updater/check?product=stremio-shell-ng",
-    "https://www.stremio.net/updater/check?product=stremio-shell-ng",
-];
 pub const STREMIO_SERVER_DEV_MODE: &str = "STREMIO_SERVER_DEV_MODE";
 pub const SRV_BUFFER_SIZE: usize = 1024;
 pub const SERVER_IPC_KEY: &str = "SERVER_IPC_KEY";
@@ -55,6 +50,22 @@ pub fn web_endpoint_with_streaming_server(server_url: &str) -> String {
             .collect::<String>();
 
     format!("{server_url}/proxy/d={encoded_web_endpoint}/#/")
+}
+
+pub fn is_trusted_shell_navigation_url(uri: &str) -> bool {
+    let Ok(url) = Url::parse(uri) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    match (url.scheme(), url.host_str(), url.port_or_known_default()) {
+        ("http", Some("127.0.0.1" | "localhost"), Some(11470)) => true,
+        ("https", Some("web.stremio.com" | "staging.strem.io" | "app.strem.io"), Some(443)) => {
+            true
+        }
+        _ => false,
+    }
 }
 
 pub fn safe_url(uri: &str) -> Option<String> {
@@ -137,5 +148,16 @@ mod tests {
     #[test]
     fn invalid_urls_are_not_opened() {
         assert_eq!(safe_url("not a url"), None);
+    }
+
+    #[test]
+    fn trusted_shell_navigation_urls() {
+        assert!(is_trusted_shell_navigation_url(
+            "http://127.0.0.1:11470/proxy/d=https%3A%2F%2Fweb.stremio.com/#/"
+        ));
+        assert!(is_trusted_shell_navigation_url("https://web.stremio.com/#/"));
+        assert!(!is_trusted_shell_navigation_url("https://evil.example.com/"));
+        assert!(!is_trusted_shell_navigation_url("http://127.0.0.1:9999/"));
+        assert!(!is_trusted_shell_navigation_url("javascript:alert(1)"));
     }
 }

@@ -1,6 +1,8 @@
 use std::{
+    fs,
     io::{Read, Write},
-    path::PathBuf,
+    path::{Component, Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{anyhow, Context};
@@ -34,16 +36,49 @@ struct UpdateResponse {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileItem {
-    // name: String,
     pub url: Url,
     pub checksum: String,
     os: String,
 }
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Descriptor {
     version: String,
     files: Vec<FileItem>,
+}
+
+fn validated_installer_filename(url: &Url) -> Result<String, anyhow::Error> {
+    if url.scheme() != "https" {
+        return Err(anyhow!("Update installer URL must use HTTPS"));
+    }
+    let file_name = Path::new(url.path())
+        .file_name()
+        .context("Invalid file name")?
+        .to_str()
+        .context("The path is not valid UTF-8")?
+        .to_string();
+    let mut components = Path::new(&file_name).components();
+    if !matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    ) {
+        return Err(anyhow!("Invalid installer file name"));
+    }
+    let ext = Path::new(&file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default();
+    if !matches!(ext.to_ascii_lowercase().as_str(), "exe" | "msi") {
+        return Err(anyhow!("Unsupported installer file extension: {ext}"));
+    }
+    Ok(file_name)
+}
+
+fn updates_dir() -> Result<PathBuf, anyhow::Error> {
+    let dir = crate::stremio_app::enhanced::base_dir().join("updates");
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
 }
 
 impl Updater {
@@ -59,13 +94,24 @@ impl Updater {
 
     /// Fetches the latest update from the update server.
     pub fn autoupdate(&self) -> Result<Option<Update>, anyhow::Error> {
-        // Check for updates
         println!("Fetching updates for v{}", self.current_version);
         println!("Using updater endpoint {}", self.endpoint);
-        let update_response =
-            reqwest::blocking::get(self.endpoint.clone())?.json::<UpdateResponse>()?;
-        let update_descriptor =
-            reqwest::blocking::get(update_response.version_desc)?.json::<Descriptor>()?;
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .user_agent("StremioEnhanced/5.0")
+            .build()?;
+
+        let update_response = client
+            .get(self.endpoint.clone())
+            .send()?
+            .error_for_status()?
+            .json::<UpdateResponse>()?;
+        let update_descriptor = client
+            .get(update_response.version_desc)
+            .send()?
+            .error_for_status()?
+            .json::<Descriptor>()?;
 
         if update_response.version != update_descriptor.version {
             return Err(anyhow!("Mismatched update versions"));
@@ -84,18 +130,13 @@ impl Updater {
         }
         println!("Found update v{version}");
 
-        let file_name = std::path::Path::new(installer.url.path())
-            .file_name()
-            .context("Invalid file name")?
-            .to_str()
-            .context("The path is not valid UTF-8")?
-            .to_string();
-        let temp_dir = std::env::temp_dir();
-        let dest = temp_dir.join(file_name);
+        let file_name = validated_installer_filename(&installer.url)?;
+        let dest = updates_dir()?.join(file_name);
 
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        // Download the new setup file
-        let mut installer_response = reqwest::blocking::get(installer.url.clone())?;
+        let mut installer_response = client
+            .get(installer.url.clone())
+            .send()?
+            .error_for_status()?;
         let size = installer_response.content_length();
         let mut downloaded: u64 = 0;
         let mut sha256 = Sha256::new();
@@ -103,7 +144,7 @@ impl Updater {
         println!("Downloading {} to {}", installer.url, dest.display());
 
         let mut chunk = [0u8; 8192];
-        let mut file = std::fs::File::create(&dest)?;
+        let mut file = fs::File::create(&dest)?;
         loop {
             let chunk_size = installer_response.read(&mut chunk)?;
             if chunk_size == 0 {
@@ -121,16 +162,35 @@ impl Updater {
         }
         println!();
         let actual_sha256 = format!("{:x}", sha256.finalize());
-        if actual_sha256 != installer.checksum {
-            std::fs::remove_file(dest)?;
-            return Err(anyhow::anyhow!("Checksum verification failed"));
+        if !actual_sha256.eq_ignore_ascii_case(&installer.checksum) {
+            fs::remove_file(&dest)?;
+            return Err(anyhow!("Checksum verification failed"));
         }
         println!("Checksum verified.");
 
-        let update = Some(Update {
+        Ok(Some(Update {
             version,
             file: dest,
-        });
-        Ok(update)
+        }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_installer_filename_and_scheme() {
+        let valid = Url::parse("https://example.com/releases/StremioEnhancedSetup.exe").unwrap();
+        assert_eq!(
+            validated_installer_filename(&valid).unwrap(),
+            "StremioEnhancedSetup.exe"
+        );
+
+        let insecure = Url::parse("http://example.com/releases/StremioEnhancedSetup.exe").unwrap();
+        assert!(validated_installer_filename(&insecure).is_err());
+
+        let wrong_ext = Url::parse("https://example.com/releases/script.bat").unwrap();
+        assert!(validated_installer_filename(&wrong_ext).is_err());
     }
 }

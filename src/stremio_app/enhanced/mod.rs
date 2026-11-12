@@ -1,10 +1,22 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
+use once_cell::sync::Lazy;
 use serde::Deserialize;
+use url::Url;
 
 pub const ENHANCED_SCRIPT: &str = include_str!("enhanced.js");
+
+static HTTP_CLIENT: Lazy<reqwest::blocking::Client> = Lazy::new(|| {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(25))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .user_agent("StremioEnhanced/5.0")
+        .build()
+        .expect("Failed to initialize HTTP client")
+});
 
 /// Metadata parsed from plugin/theme file headers.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -304,12 +316,13 @@ impl EnhancedManager {
         file_name: &str,
         content: &str,
     ) -> std::io::Result<()> {
+        let safe_name = sanitize_mod_file_name(mod_type, file_name)?;
         let dir = if mod_type.eq_ignore_ascii_case("theme") {
             &self.themes_dir
         } else {
             &self.plugins_dir
         };
-        let target = dir.join(file_name);
+        let target = dir.join(safe_name);
         fs::write(&target, content)?;
         println!("[Enhanced] Installed {mod_type} to {}", target.display());
         self.reload();
@@ -318,12 +331,13 @@ impl EnhancedManager {
 
     /// Deletes a plugin or theme file and reloads.
     pub fn delete_mod(&mut self, mod_type: &str, file_name: &str) -> std::io::Result<()> {
+        let safe_name = sanitize_mod_file_name(mod_type, file_name)?;
         let dir = if mod_type.eq_ignore_ascii_case("theme") {
             &self.themes_dir
         } else {
             &self.plugins_dir
         };
-        let target = dir.join(file_name);
+        let target = dir.join(safe_name);
         if target.exists() {
             fs::remove_file(&target)?;
             println!("[Enhanced] Deleted {mod_type} file {}", target.display());
@@ -333,13 +347,13 @@ impl EnhancedManager {
                 .settings
                 .active_theme
                 .as_deref()
-                .is_some_and(|active| active.eq_ignore_ascii_case(file_name))
+                .is_some_and(|active| active.eq_ignore_ascii_case(safe_name))
             {
                 self.settings.active_theme = None;
                 self.save_settings();
             }
         } else {
-            self.settings.enabled_plugins.remove(file_name);
+            self.settings.enabled_plugins.remove(safe_name);
             self.save_settings();
         }
         self.reload();
@@ -638,28 +652,81 @@ impl EnhancedManager {
     }
 }
 
+/// Validates that a plugin or theme filename is a single safe path component with the expected extension.
+pub fn sanitize_mod_file_name<'a>(mod_type: &str, file_name: &'a str) -> std::io::Result<&'a str> {
+    if file_name.is_empty() || file_name.contains(['/', '\\', '\0']) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid mod file name",
+        ));
+    }
+    let mut components = Path::new(file_name).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(_)), None) => {}
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Mod file name must be a single path segment",
+            ));
+        }
+    }
+    let expected_ext = if mod_type.eq_ignore_ascii_case("theme") {
+        "css"
+    } else if mod_type.eq_ignore_ascii_case("plugin") {
+        "js"
+    } else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Unsupported mod type",
+        ));
+    };
+    if !Path::new(file_name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(expected_ext))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Mod file name must end with .{expected_ext}"),
+        ));
+    }
+    Ok(file_name)
+}
+
+/// Builds the JavaScript snippet that creates or updates the `#activeTheme` `<style>` element.
+pub fn theme_injection_script(css: Option<&str>) -> String {
+    let css_json = serde_json::to_string(css.unwrap_or_default()).unwrap_or_else(|_| "\"\"".to_string());
+    format!(
+        r#"(function() {{
+    try {{
+        var s = document.getElementById('activeTheme') || document.createElement('style');
+        s.id = 'activeTheme';
+        s.textContent = {css_json};
+        (document.head || document.documentElement).appendChild(s);
+    }} catch(e) {{}}
+}})();"#
+    )
+}
+
 /// Opens a directory in the user's default file manager.
 pub fn open_folder(path: &Path) {
     if !path.exists() {
         let _ = fs::create_dir_all(path);
     }
     if let Err(e) = open::that(path) {
-        eprintln!("[Enhanced] Failed to open folder via open::that: {e}, attempting explorer fallback");
-        let _ = std::process::Command::new("explorer").arg(path).spawn();
+        eprintln!("[Enhanced] Failed to open folder via open::that: {e}");
     }
 }
 
-/// Helper to fetch URL content synchronously bypassing CORS via reqwest.
+/// Helper to fetch HTTP(S) URL content synchronously bypassing CORS via reqwest.
 pub fn http_get(url: &str) -> Result<(u16, String), String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(25))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let parsed = Url::parse(url).map_err(|e| format!("Invalid URL: {e}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host().is_none() {
+        return Err("Only HTTP(S) URLs with a valid host are allowed".to_string());
+    }
 
-    let res = client
-        .get(url)
-        .header(reqwest::header::USER_AGENT, "StremioShell/5.0")
+    let res = HTTP_CLIENT
+        .get(parsed)
         .send()
         .map_err(|e| e.to_string())?;
 
@@ -782,5 +849,38 @@ mod tests {
         let s4: Settings = serde_json::from_str(json4).unwrap();
         assert!(s4.enabled_plugins.is_empty());
         assert_eq!(s4.active_theme, None);
+    }
+
+    #[test]
+    fn test_sanitize_mod_file_name() {
+        assert_eq!(
+            sanitize_mod_file_name("plugin", "example.plugin.js").unwrap(),
+            "example.plugin.js"
+        );
+        assert_eq!(
+            sanitize_mod_file_name("theme", "amoled.theme.css").unwrap(),
+            "amoled.theme.css"
+        );
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../evil.js",
+            r"..\evil.js",
+            "sub/evil.js",
+            "evil.exe",
+            "plugin.css",
+        ] {
+            assert!(sanitize_mod_file_name("plugin", bad).is_err(), "{}", bad);
+        }
+        assert!(sanitize_mod_file_name("theme", "script.js").is_err());
+        assert!(sanitize_mod_file_name("other", "script.js").is_err());
+    }
+
+    #[test]
+    fn test_http_get_rejects_non_http_schemes() {
+        assert!(http_get("file:///C:/Windows/System32/drivers/etc/hosts").is_err());
+        assert!(http_get("javascript:alert(1)").is_err());
+        assert!(http_get("not-a-url").is_err());
     }
 }

@@ -95,7 +95,7 @@ begin
   SettingsURL := 'ms-settings:defaultapps';
   GetWindowsVersionEx(Version);
   if (Version.Major >= 10) and (Version.Build >= 22000) then
-    SettingsURL := SettingsURL + '?registeredAppUser=Stremio5';
+    SettingsURL := SettingsURL + '?registeredAppUser=StremioEnhanced';
   ShellExecAsOriginalUser('', SettingsURL, '', '', SW_SHOW, ewNoWait, ErrorCode);
 end;
 
@@ -108,7 +108,7 @@ begin
     Backup := ExpandConstant('{tmp}\stremio-' + Scheme + '.reg');
     Result := Exec(ExpandConstant('{sys}\reg.exe'),
       'export "HKEY_CURRENT_USER\Software\Classes\' + Scheme + '" "' + Backup + '" /y',
-      '', SW_HIDE, ewWaitUntilTerminated, ErrorCode) and (ErrorCode = 0);
+      '', SW_SHOWMINNOACTIVE, ewWaitUntilTerminated, ErrorCode) and (ErrorCode = 0);
   end;
 end;
 
@@ -128,6 +128,6 @@ var
 begin
   if Backup <> '' then
     if not Exec(ExpandConstant('{sys}\reg.exe'), 'import "' + Backup + '"',
-      '', SW_HIDE, ewWaitUntilTerminated, ErrorCode) or (ErrorCode <> 0) then
+      '', SW_SHOWMINNOACTIVE, ewWaitUntilTerminated, ErrorCode) or (ErrorCode <> 0) then
       SuppressibleMsgBox('Unable to restore link handlers from ' + Backup, mbError, MB_OK, IDOK);
 end;

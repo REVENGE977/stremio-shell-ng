@@ -178,7 +178,7 @@ impl PartialUi for WebView {
         let controller_focus = data.controller.clone();
         let enhanced_for_loading = data.enhanced.clone();
         let endpoint = data.endpoint.clone();
-        let webview_flags = "--autoplay-policy=no-user-gesture-required --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+        let webview_flags = "--autoplay-policy=no-user-gesture-required --disable-features=msWebOOUI,msPdfOOUI";
         let result = webview2::EnvironmentBuilder::new()
             .with_additional_browser_arguments(webview_flags)
             .build(move |env| {
@@ -345,19 +345,8 @@ impl PartialUi for WebView {
                                 wv.execute_script(crate::stremio_app::enhanced::ENHANCED_SCRIPT, |_| Ok(())).ok();
 
                                 if let Some(css) = active_theme_css {
-                                    if let Ok(css_json) = serde_json::to_string(&css) {
-                                        let script = format!(r##"
-                                        (function() {{
-                                            try {{
-                                                var s = document.getElementById('activeTheme') || document.createElement('style');
-                                                s.id = 'activeTheme';
-                                                s.textContent = {css_json};
-                                                (document.head || document.documentElement).appendChild(s);
-                                            }} catch(e) {{}}
-                                        }})();
-                                        "##);
-                                        wv.execute_script(&script, |_| Ok(())).ok();
-                                    }
+                                    let script = crate::stremio_app::enhanced::theme_injection_script(Some(&css));
+                                    wv.execute_script(&script, |_| Ok(())).ok();
                                 }
                             }
 
