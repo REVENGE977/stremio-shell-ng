@@ -916,6 +916,11 @@ fn handle_enhanced_action(action: EnhancedAction, ctx: &IpcBridgeContext) {
                 eprintln!("Failed to skip server version: {e}");
             }
         }
+        EnhancedAction::SkipClientVersion { version } => {
+            if let Err(e) = ctx.enhanced.lock().unwrap().skip_client_version(&version) {
+                eprintln!("Failed to skip client version: {e}");
+            }
+        }
         EnhancedAction::TogglePlugin { file_name, enabled } => {
             let mut mgr = ctx.enhanced.lock().unwrap();
             mgr.toggle_plugin(&file_name, enabled);
