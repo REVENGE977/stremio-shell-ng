@@ -268,7 +268,8 @@
         .plugin-settings-btn:hover {
             background-color: rgba(255, 255, 255, 0.16) !important;
         }
-        .plugin-delete-btn:hover {
+        .plugin-delete-btn:hover,
+        .theme-delete-btn:hover {
             background-color: rgba(220, 38, 38, 0.22) !important;
             color: #ff6b6b !important;
         }
@@ -459,7 +460,7 @@
   }
 
   // src/components/theme-item/theme-item.html
-  var theme_item_default = '<div name="{{ fileName }}-box" tabindex="0" class="addon-whmdO animation-fade-in addon-container-lC5KN button-container-zVLH6" style="margin-bottom: 1rem; display: flex; align-items: center; justify-content: space-between; padding: 1.25rem; border-radius: 0.5rem; background-color: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); transition: border-color 0.2s;">\r\n    <div class="info-container-AdMB6" style="flex: 1; min-width: 0; padding-right: 1.5rem;">\r\n        <div class="name-container-qIAg8" title="{{ name }}" style="font-size: 1.15rem; font-weight: 700; color: #fff; margin-bottom: 0.2rem;">{{ name }}</div>\r\n        <div class="version-container-zdPyN" title="{{ version }}" style="font-size: 0.8rem; color: rgba(255, 255, 255, 0.5); margin-bottom: 0.4rem;">{{ version }}</div>\r\n        <div class="description-container-v7Jhe" style="font-size: 0.85rem; color: rgba(255, 255, 255, 0.7); line-height: 1.4;">\r\n            {{ descriptionBlock }}\r\n            {{ authorBlock }}\r\n        </div>\r\n    </div>\r\n    <div class="buttons-container-g0xXr" style="width: auto; flex-shrink: 0;">\r\n        <div class="action-buttons-container-xMVmz" style="display: flex; align-items: center;">\r\n            <div tabindex="-1" class="install-button-container-yfcq5 button-container-zVLH6 theme-update-btn" style="background-color: #f5bf42; color: #16152b; display: none; margin-right: 1rem; cursor: pointer; user-select: none; padding: 0.5rem 1.1rem; border-radius: 0.35rem; font-weight: 700;" id="{{ fileName }}-update" title="Update available">\r\n                <div class="label-OnWh2" style="color: #16152b; font-weight: bold;">Update</div>\r\n            </div>\r\n\r\n            <div tabindex="-1" class="{{ buttonClass }} button-container-zVLH6 theme-apply-btn" data-theme="{{ fileName }}" id="theme-btn-{{ fileName }}" style="cursor: pointer; user-select: none; min-width: 6.5rem; text-align: center; padding: 0.5rem 1.25rem; border-radius: 0.35rem; font-weight: 700;">\r\n                <div class="label-OnWh2" style="color: white; font-weight: bold;">{{ label }}</div>\r\n            </div>\r\n        </div>\r\n    </div>\r\n</div>\r\n';
+  var theme_item_default = '<div name="{{ fileName }}-box" tabindex="0" class="addon-whmdO animation-fade-in addon-container-lC5KN button-container-zVLH6" style="margin-bottom: 1rem; display: flex; align-items: center; justify-content: space-between; padding: 1.25rem; border-radius: 0.5rem; background-color: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); transition: border-color 0.2s;">\r\n    <div class="info-container-AdMB6" style="flex: 1; min-width: 0; padding-right: 1.5rem;">\r\n        <div class="name-container-qIAg8" title="{{ name }}" style="font-size: 1.15rem; font-weight: 700; color: #fff; margin-bottom: 0.2rem;">{{ name }}</div>\r\n        <div class="version-container-zdPyN" title="{{ version }}" style="font-size: 0.8rem; color: rgba(255, 255, 255, 0.5); margin-bottom: 0.4rem;">{{ version }}</div>\r\n        <div class="description-container-v7Jhe" style="font-size: 0.85rem; color: rgba(255, 255, 255, 0.7); line-height: 1.4;">\r\n            {{ descriptionBlock }}\r\n            {{ authorBlock }}\r\n        </div>\r\n    </div>\r\n    <div class="buttons-container-g0xXr" style="width: auto; flex-shrink: 0;">\r\n        <div class="action-buttons-container-xMVmz" style="display: flex; align-items: center;">\r\n            <div tabindex="-1" class="install-button-container-yfcq5 button-container-zVLH6 theme-update-btn" style="background-color: #f5bf42; color: #16152b; display: none; margin-right: 1rem; cursor: pointer; user-select: none; padding: 0.5rem 1.1rem; border-radius: 0.35rem; font-weight: 700;" id="{{ fileName }}-update" title="Update available">\r\n                <div class="label-OnWh2" style="color: #16152b; font-weight: bold;">Update</div>\r\n            </div>\r\n\r\n            <div tabindex="0" id="{{ fileName }}-delete" title="Delete theme" class="button-container-zVLH6 theme-delete-btn" style="display: {{ deleteDisplay }}; cursor: pointer; margin-right: 0.9rem; align-items: center; justify-content: center; width: 2.2rem; height: 2.2rem; border-radius: 50%; background-color: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.75); transition: background-color 0.2s, color 0.2s;">\r\n                <svg style="width: 1.05rem; height: 1.05rem; fill: currentcolor;" viewBox="0 0 24 24">\r\n                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"></path>\r\n                </svg>\r\n            </div>\r\n\r\n            <div tabindex="-1" class="{{ buttonClass }} button-container-zVLH6 theme-apply-btn" data-theme="{{ fileName }}" id="theme-btn-{{ fileName }}" style="cursor: pointer; user-select: none; min-width: 6.5rem; text-align: center; padding: 0.5rem 1.25rem; border-radius: 0.35rem; font-weight: 700;">\r\n                <div class="label-OnWh2" style="color: white; font-weight: bold;">{{ label }}</div>\r\n            </div>\r\n        </div>\r\n    </div>\r\n</div>\r\n';
 
   // src/utils/templateCache.ts
   var TemplateCache = class {
@@ -475,298 +476,6 @@
       return result;
     }
   };
-
-  // src/components/theme-item/themeItem.ts
-  function createThemeCard(fileName, meta, isApplied, onApply) {
-    const buttonClass = isApplied ? "uninstall-button-container-oV4Yo disabled" : "install-button-container-yfcq5";
-    const label = isApplied ? "Applied" : "Apply";
-    const descriptionBlock = meta.description ? `<b>Description:</b> ${escapeHtml(meta.description)}<br>` : "";
-    const authorBlock = meta.author ? `<b>Author:</b> ${escapeHtml(meta.author)}` : "";
-    const html = TemplateCache.render(theme_item_default, {
-      fileName: escapeHtml(fileName),
-      name: escapeHtml(meta.name),
-      version: escapeHtml(meta.version || ""),
-      descriptionBlock,
-      authorBlock,
-      buttonClass,
-      label
-    });
-    const wrapper = document.createElement("div");
-    wrapper.innerHTML = html.trim();
-    const card = wrapper.firstElementChild;
-    const applyBtn = card.querySelector(".theme-apply-btn");
-    if (applyBtn) {
-      applyBtn.onclick = function() {
-        if (applyBtn.classList.contains("disabled")) return;
-        onApply(fileName);
-      };
-    }
-    return card;
-  }
-
-  // src/components/marketplace-tab/marketplace-tab.html
-  var marketplace_tab_default = '<div class="marketplace-inline-view" style="width: 100%; box-sizing: border-box;">\n    <div style="margin-bottom: 1rem;">\n        <label title="Search themes/plugins" style="display: flex; align-items: center; background: var(--surface-background-color, rgba(255, 255, 255, 0.06)); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: var(--border-radius, 0.75rem); padding: 0.65rem 1rem; width: 100%; box-sizing: border-box;">\n            <input id="marketplace-search-input" size="1" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" tabindex="0" class="search-input-bAgAh" type="text" placeholder="Search themes and plugins..." value="" style="flex: 1; background: transparent; border: none; outline: none; color: var(--foreground-color-primary, #fff); font-size: 1rem;">\n            <svg viewBox="0 0 512 512" style="width: 1.2rem; height: 1.2rem; fill: rgba(255, 255, 255, 0.6); margin-left: 0.5rem; flex-shrink: 0;">\n                <path d="M456.882 415.7999999999997l-93.791-89.45c22.605-28.67 34.784-63.57 34.686-99.44 0-91.54-78.142-166.07-174.125-166.07s-174.125 74.53-174.125 166.17c0 91.54 78.142 166.07 174.125 166.07 37.586 0 74.161-11.61 104.256-33.08l93.79 89.45c3.535 3.04 7.91 5.05 12.604 5.79 4.696 0.74 9.515 0.18 13.887-1.61 4.374-1.79 8.117-4.74 10.788-8.49 2.671-3.76 4.157-8.17 4.284-12.7 0.108-6.11-2.165-12.04-6.379-16.64m-357.62-188.79c-0.01-29.43 11.453-57.8 32.162-79.61 20.709-21.82 49.183-35.49 79.884-38.39 30.7-2.9 61.433 5.2 86.221 22.72 24.787 17.52 41.858 43.2 47.891 72.05 6.034 28.86 0.598 58.83-15.249 84.07s-40.972 43.96-70.489 52.53c-29.518 8.55-61.317 6.33-89.213-6.24s-49.895-34.57-61.718-61.75c-6.258-14.38-9.483-29.81-9.488-45.38" style="fill: currentcolor;"></path>\n            </svg>\n        </label>\n    </div>\n\n    <div tabindex="0" title="Submit your themes and plugins here" style="margin-bottom: 1.25rem; text-align: center;">\n        <a href="https://github.com/REVENGE977/stremio-enhanced-registry" target="_blank" rel="noreferrer" class="enhanced-link" style="display: block; text-decoration: none;">\n            <span class="enhanced-link-label">Submit your themes and plugins here</span>\n        </a>\n    </div>\n\n    <div id="mods-list" style="display: flex; flex-direction: column; gap: 1rem; width: 100%; box-sizing: border-box;">\n        <div id="marketplace-loading" style="padding: 2.5rem; text-align: center; color: rgba(255, 255, 255, 0.7); font-size: 1.05rem;">\n            Loading community plugins &amp; themes...\n        </div>\n    </div>\n</div>\n';
-
-  // src/components/marketplace-tab/marketplaceTab.ts
-  function getMarketplaceTabHtml() {
-    return TemplateCache.render(marketplace_tab_default, {});
-  }
-
-  // src/components/marketplace-item/marketplace-item.html
-  var marketplace_item_default = '<div name="{{ name }}-box" tabindex="0" class="marketplace-item-card animation-fade-in" style="width: 100%; box-sizing: border-box; margin: 0 0 1rem 0; display: flex; align-items: center; justify-content: space-between; padding: 1.25rem 1.5rem; border-radius: 0.5rem; background-color: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); transition: border-color 0.2s, background-color 0.2s;">\r\n    <div class="marketplace-logo-box" style="width: 4.5rem; height: 4.5rem; flex-shrink: 0; margin-right: 1.25rem; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.35); border-radius: 0.4rem; overflow: hidden; padding: 0.25rem; box-sizing: border-box;">\r\n        {{ logoBlock }}\r\n    </div>\r\n\r\n    <div class="marketplace-info-container" style="flex: 1; min-width: 0; padding-right: 1.5rem; box-sizing: border-box;">\r\n        <div style="display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 0.4rem;">\r\n            <span class="marketplace-title" title="{{ name }}" style="font-size: 1.2rem; font-weight: 700; color: #fff; line-height: 1.35; white-space: normal !important; overflow: visible !important; text-overflow: unset !important; word-break: break-word !important;">{{ name }}</span>\r\n            <span style="font-size: 0.8rem; color: rgba(255, 255, 255, 0.5); font-weight: 500; white-space: nowrap;">v{{ version }}</span>\r\n            <span style="font-size: 0.725rem; text-transform: uppercase; font-weight: 600; padding: 0.15rem 0.5rem; border-radius: 0.25rem; background: rgba(115, 91, 242, 0.25); color: #b4a2f8; border: 1px solid rgba(115, 91, 242, 0.4); white-space: nowrap;">{{ type }}</span>\r\n        </div>\r\n        <div style="font-size: 0.875rem; color: rgba(255, 255, 255, 0.75); line-height: 1.45; word-break: break-word;">\r\n            <div style="margin-bottom: 0.25rem;"><b>Description:</b> {{ description }}</div>\r\n            <div><b>Author:</b> {{ author }}</div>\r\n        </div>\r\n    </div>\r\n    <div class="marketplace-buttons-container" style="width: auto; flex-shrink: 0; display: flex; align-items: center; gap: 0.75rem; margin-left: 1rem;">\r\n        <div class="action-buttons-container-xMVmz">\r\n            <div tabindex="-1" title="{{ actionbtnTitle }}" class="{{ actionbtnClass }} modActionBtn" data-link="{{ download }}" data-type="{{ type }}" style="cursor: pointer; user-select: none; min-width: 6.5rem; text-align: center; padding: 0.55rem 1.25rem; border-radius: 0.35rem; font-weight: 700; font-size: 0.9rem; transition: all 0.2s ease;">\r\n                <div class="label-OnWh2" style="color: white; font-weight: bold;">{{ actionbtnTitle }}</div>\r\n            </div>\r\n        </div>\r\n        {{ repoBlock }}\r\n    </div>\r\n</div>\r\n';
-
-  // src/components/marketplace-item/marketplaceItem.ts
-  function createMarketplaceCard(mod, type, isInstalled, onAction) {
-    let logoBlock = "";
-    if (mod.preview) {
-      logoBlock = `
-            <a href="${escapeHtml(mod.preview)}" target="_blank" rel="noreferrer" style="cursor: zoom-in; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;">
-                <img class="logo-WrsGF" src="${escapeHtml(mod.preview)}" alt="${escapeHtml(mod.name)} Preview" loading="lazy" style="max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px;">
-            </a>`;
-    } else if (type === "Theme") {
-      logoBlock = `
-            <svg viewBox="0 0 24 24" style="width: 2.2rem; height: 2.2rem; fill: currentcolor;">
-                <path d="M4 3h16a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm2 9h6a1 1 0 0 1 1 1v3h1v6h-4v-6h1v-2H5a1 1 0 0 1-1-1v-2h2v1zm11.732 1.732l1.768-1.768 1.768 1.768a2.5 2.5 0 1 1-3.536 0z"></path>
-            </svg>`;
-    } else {
-      logoBlock = `
-            <svg viewBox="0 0 24 24" style="width: 2.2rem; height: 2.2rem; fill: currentcolor;">
-                <path d="M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5C13 2.12 11.88 1 10.5 1S8 2.12 8 3.5V5H4c-1.1 0-1.99.9-1.99 2v3.8H3.5c1.49 0 2.7 1.21 2.7 2.7s-1.21 2.7-2.7 2.7H2V20c0 1.1.9 2 2 2h3.8v-1.5c0-1.49 1.21-2.7 2.7-2.7 1.49 0 2.7 1.21 2.7 2.7V22H17c1.1 0 2-.9 2-2v-4h1.5c1.49 0 2.7-1.21 2.7-2.7s-1.21-2.7-2.7-2.7z"></path>
-            </svg>`;
-    }
-    let repoBlock = "";
-    if (mod.repo) {
-      repoBlock = `
-            <a href="${escapeHtml(mod.repo)}" target="_blank" rel="noreferrer" class="marketplace-repo-btn" style="cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; padding: 0.55rem 1rem; border-radius: 0.35rem; background: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.85); font-size: 0.85rem; font-weight: 500; transition: background 0.2s;">
-                <svg viewBox="0 0 24 24" style="width: 1.15rem; height: 1.15rem; fill: currentcolor; margin-right: 0.4rem; flex-shrink: 0;">
-                    <path d="M12,2A10,10 0 0,0 2,12C2,16.42 4.87,20.17 8.84,21.5C9.34,21.58 9.5,21.27 9.5,21C9.5,20.77 9.5,20.14 9.5,19.31C6.73,19.91 6.14,17.97 6.14,17.97C5.68,16.81 5.03,16.5 5.03,16.5C4.12,15.88 5.1,15.9 5.1,15.9C6.1,15.97 6.63,16.93 6.63,16.93C7.5,18.45 8.97,18 9.54,17.76C9.63,17.11 9.89,16.67 10.17,16.42C7.95,16.17 5.62,15.31 5.62,11.5C5.62,10.39 6,9.5 6.65,8.79C6.55,8.54 6.2,7.5 6.75,6.15C6.75,6.15 7.59,5.88 9.5,7.17C10.29,6.95 11.15,6.84 12,6.84C12.85,6.84 13.71,6.95 14.5,7.17C16.41,5.88 17.25,6.15 17.25,6.15C17.8,7.5 17.45,8.54 17.35,8.79C18,9.5 18.38,10.39 18.38,11.5C18.38,15.32 16.04,16.16 13.81,16.41C14.17,16.72 14.5,17.33 14.5,18.26C14.5,19.6 14.5,20.68 14.5,21C14.5,21.27 14.66,21.59 15.17,21.5C19.14,20.16 22,16.42 22,12A10,10 0 0,0 12,2Z" />
-                </svg>
-                <span>Open repository</span>
-            </a>`;
-    }
-    const actionbtnTitle = isInstalled ? "Uninstall" : "Install";
-    const actionbtnClass = isInstalled ? "uninstall-button-container-oV4Yo" : "install-button-container-yfcq5";
-    const html = TemplateCache.render(marketplace_item_default, {
-      name: escapeHtml(mod.name),
-      version: escapeHtml(mod.version || "1.0.0"),
-      type,
-      description: escapeHtml(mod.description),
-      author: escapeHtml(mod.author),
-      actionbtnTitle,
-      actionbtnClass,
-      download: escapeHtml(mod.download),
-      logoBlock,
-      repoBlock
-    });
-    const wrapper = document.createElement("div");
-    wrapper.innerHTML = html.trim();
-    const card = wrapper.querySelector(".marketplace-item-card") || wrapper.firstElementChild;
-    const btn = card.querySelector(".modActionBtn");
-    if (btn) {
-      btn.onclick = async () => {
-        const currentTitle = btn.getAttribute("title");
-        const willInstall = currentTitle === "Install";
-        await onAction(mod, type, willInstall, btn);
-      };
-    }
-    return card;
-  }
-
-  // src/marketplace/marketplaceManager.ts
-  var REGISTRY_URL = "https://raw.githubusercontent.com/REVENGE977/stremio-enhanced-registry/refs/heads/main/registry.json";
-  var currentEnhancedData = {
-    plugins: [],
-    themes: [],
-    activeTheme: null
-  };
-  var cachedRegistry = null;
-  function updateMarketplaceData(data) {
-    currentEnhancedData = data;
-    syncMarketplaceInstalledState();
-  }
-  function getFileNameFromUrl(url) {
-    try {
-      const parsed = new URL(url);
-      const parts = parsed.pathname.split("/");
-      return parts[parts.length - 1] || "";
-    } catch (_) {
-      const clean = url.split("?")[0].split("#")[0];
-      return clean.substring(clean.lastIndexOf("/") + 1);
-    }
-  }
-  function isPluginInstalled(fileName) {
-    const fn = fileName.toLowerCase();
-    return (currentEnhancedData.plugins || []).some((p) => (p.fileName || "").toLowerCase() === fn);
-  }
-  function isThemeInstalled(fileName) {
-    const fn = fileName.toLowerCase();
-    return (currentEnhancedData.themes || []).some((t) => (t.fileName || "").toLowerCase() === fn);
-  }
-  async function fetchRegistry() {
-    if (cachedRegistry) return cachedRegistry;
-    console.log("[Enhanced Marketplace] Fetching registry from:", REGISTRY_URL);
-    const response = await fetch(REGISTRY_URL);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch marketplace registry: HTTP ${response.status}`);
-    }
-    const text = await response.text();
-    const data = JSON.parse(text);
-    cachedRegistry = {
-      plugins: Array.isArray(data.plugins) ? data.plugins : [],
-      themes: Array.isArray(data.themes) ? data.themes : []
-    };
-    console.log(`[Enhanced Marketplace] Loaded registry with ${cachedRegistry.plugins.length} plugins and ${cachedRegistry.themes.length} themes.`);
-    return cachedRegistry;
-  }
-  function setupSearchBar() {
-    const searchInput = document.getElementById("marketplace-search-input");
-    const modsList = document.getElementById("mods-list");
-    if (!searchInput || !modsList) return;
-    searchInput.addEventListener("input", () => {
-      const query = searchInput.value.trim().toLowerCase();
-      const items = modsList.querySelectorAll(".marketplace-item-card, .addon-container-lC5KN");
-      items.forEach((item) => {
-        const name = (item.querySelector(".marketplace-title") || item.querySelector(".name-container-qIAg8"))?.textContent?.toLowerCase() || "";
-        const desc = item.textContent?.toLowerCase() || "";
-        const matches = !query || name.includes(query) || desc.includes(query);
-        item.style.display = matches ? "" : "none";
-      });
-    });
-  }
-  function syncMarketplaceInstalledState() {
-    const modsList = document.getElementById("mods-list");
-    if (!modsList) return;
-    modsList.querySelectorAll(".modActionBtn").forEach((btn) => {
-      const link = btn.getAttribute("data-link") || "";
-      const type = btn.getAttribute("data-type");
-      if (!link || !type) return;
-      const fileName = getFileNameFromUrl(link);
-      const installed = type === "Plugin" ? isPluginInstalled(fileName) : isThemeInstalled(fileName);
-      const label = btn.querySelector(".label-OnWh2") || btn;
-      if (installed) {
-        btn.classList.remove("install-button-container-yfcq5");
-        btn.classList.add("uninstall-button-container-oV4Yo");
-        btn.setAttribute("title", "Uninstall");
-        label.textContent = "Uninstall";
-      } else {
-        btn.classList.remove("uninstall-button-container-oV4Yo");
-        btn.classList.add("install-button-container-yfcq5");
-        btn.setAttribute("title", "Install");
-        label.textContent = "Install";
-      }
-    });
-  }
-  async function renderMarketplaceInline(forceReload = false) {
-    const container = document.getElementById("enhanced-marketplace-content");
-    if (!container) return;
-    if (!forceReload && container.getAttribute("data-loaded") === "true") {
-      syncMarketplaceInstalledState();
-      return;
-    }
-    if (container.getAttribute("data-loading") === "true") return;
-    container.setAttribute("data-loading", "true");
-    container.removeAttribute("data-loaded");
-    container.innerHTML = getMarketplaceTabHtml();
-    setupSearchBar();
-    const modsList = document.getElementById("mods-list");
-    if (!modsList) {
-      container.removeAttribute("data-loading");
-      return;
-    }
-    try {
-      const registry = await fetchRegistry();
-      if (!document.body.contains(modsList)) return;
-      modsList.innerHTML = "";
-      if ((!registry.plugins || registry.plugins.length === 0) && (!registry.themes || registry.themes.length === 0)) {
-        modsList.innerHTML = `
-                <div style="padding: 2.5rem; text-align: center; color: rgba(255,255,255,0.7); font-size: 1.05rem;">
-                    No plugins or themes found in the community registry.
-                </div>
-            `;
-        container.setAttribute("data-loaded", "true");
-        return;
-      }
-      const handleAction = async (mod, type, willInstall, btn) => {
-        const fileName = getFileNameFromUrl(mod.download);
-        const label = btn.querySelector(".label-OnWh2") || btn;
-        if (willInstall) {
-          const prevText = label.textContent;
-          label.textContent = "Installing...";
-          btn.style.pointerEvents = "none";
-          try {
-            const res = await fetch(mod.download);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const content = await res.text();
-            postEnhancedMessage("installMod", {
-              modType: type.toLowerCase(),
-              fileName,
-              content
-            });
-            btn.classList.remove("install-button-container-yfcq5");
-            btn.classList.add("uninstall-button-container-oV4Yo");
-            btn.setAttribute("title", "Uninstall");
-            label.textContent = "Uninstall";
-          } catch (err) {
-            console.error("[Enhanced Marketplace] Install failed:", err);
-            alert(`Failed to install ${mod.name}: ${err?.message || err}`);
-            label.textContent = prevText;
-          } finally {
-            btn.style.pointerEvents = "";
-          }
-        } else {
-          const prevText = label.textContent;
-          label.textContent = "Uninstalling...";
-          btn.style.pointerEvents = "none";
-          try {
-            postEnhancedMessage("deleteMod", {
-              modType: type.toLowerCase(),
-              fileName
-            });
-            btn.classList.remove("uninstall-button-container-oV4Yo");
-            btn.classList.add("install-button-container-yfcq5");
-            btn.setAttribute("title", "Install");
-            label.textContent = "Install";
-          } catch (err) {
-            console.error("[Enhanced Marketplace] Uninstall failed:", err);
-            alert(`Failed to uninstall ${mod.name}: ${err?.message || err}`);
-            label.textContent = prevText;
-          } finally {
-            btn.style.pointerEvents = "";
-          }
-        }
-      };
-      for (const plugin of registry.plugins) {
-        const fileName = getFileNameFromUrl(plugin.download);
-        const installed = isPluginInstalled(fileName);
-        const card = createMarketplaceCard(plugin, "Plugin", installed, handleAction);
-        modsList.appendChild(card);
-      }
-      for (const theme of registry.themes) {
-        const fileName = getFileNameFromUrl(theme.download);
-        const installed = isThemeInstalled(fileName);
-        const card = createMarketplaceCard(theme, "Theme", installed, handleAction);
-        modsList.appendChild(card);
-      }
-      container.setAttribute("data-loaded", "true");
-    } catch (err) {
-      console.error("[Enhanced Marketplace] Failed to load registry:", err);
-      if (!document.body.contains(modsList)) return;
-      modsList.innerHTML = `
-            <div style="padding: 2.5rem; text-align: center; color: #ff6b6b; font-size: 1rem;">
-                Failed to load community marketplace: ${err?.message || err}<br><br>
-                <button id="marketplace-retry-btn" style="padding: 0.5rem 1rem; border-radius: 4px; background: rgba(255,255,255,0.1); color: #fff; cursor: pointer; border: none;">
-                    Retry
-                </button>
-            </div>
-        `;
-      document.getElementById("marketplace-retry-btn")?.addEventListener("click", () => {
-        cachedRegistry = null;
-        renderMarketplaceInline(true);
-      });
-    } finally {
-      container.removeAttribute("data-loading");
-    }
-  }
 
   // src/components/modals/plugin-settings-modal.html
   var plugin_settings_modal_default = '<div data-focus-lock-disabled="false" class="addon-details-modal-container-aBFaQ modal-container-OuxEF modal-container" id="{{ modalId }}" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 999999; display: flex; justify-content: center; align-items: center; background-color: rgba(0, 0, 0, 0.75); box-sizing: border-box;">\r\n    <div class="modal-dialog-container-DZMKq" style="width: 50%; max-width: 800px; height: auto; max-height: 85vh; display: flex; flex-direction: column; background: #16152b; border-radius: 0.5rem; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.1); position: relative; box-sizing: border-box;">\r\n        <div class="modal-dialog-background-vZpB_"></div>\r\n        \r\n        <div tabindex="0" title="Close" class="close-button-container-cmxAp button-container-zVLH6" id="{{ modalId }}-close-x" style="position: absolute; top: 15px; right: 15px; cursor: pointer; z-index: 10; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">\r\n            <svg class="icon-OYzlV" style="width: 18px; height: 18px; fill: currentcolor;" viewBox="0 0 512 512"><path d="M289.9 256l95-95c4.5-4.5 7-10.6 7.1-17 0-6.4-2.5-12.5-7-17s-10.6-7.1-17-7.1c-3.2 0-6.3.6-9.2 1.8s-5.6 3-7.8 5.2l-95 95-95-95c-3.4-3.3-7.6-5.6-12.3-6.5-4.6-.9-9.4-.4-13.8 1.4-4.4 1.8-8.1 4.9-10.8 8.8-2.6 3.9-4 8.6-4 13.3-.1 3.2.5 6.3 1.7 9.2 1.2 2.9 3 5.6 5.2 7.8l95 95-95 95c-2.8 2.8-4.8 6.2-6 10-1.1 3.8-1.3 7.8-.5 11.6.8 3.9 2.5 7.5 5 10.5 2.5 3.1 5.8 5.4 9.4 6.9 4.4 1.8 9.2 2.3 13.8 1.4 4.7-.9 8.9-3.2 12.3-6.5l95-95 95 95c3.4 3.3 7.6 5.6 12.3 6.5 4.6.9 9.4.4 13.8-1.4 4.4-1.8 8.1-4.9 10.8-8.8 2.6-3.9 4-8.6 4-13.3.1-3.2-.5-6.3-1.7-9.2-1.2-2.9-3-5.6-5.2-7.8z"></path></svg>\r\n        </div>\r\n        \r\n        <div class="modal-dialog-content-Xgv7Z" style="display: flex; flex-direction: column; max-height: 85vh; padding: 25px 25px 20px 25px; box-sizing: border-box; min-height: 0; flex: 1 1 auto; overflow: hidden;">\r\n            <div class="title-container-v2mmF" title="{{ pluginName }} Settings" style="font-size: 1.3rem; font-weight: bold; margin-bottom: 20px; color: white; flex-shrink: 0;">{{ pluginName }} Settings</div>\r\n            \r\n            <div class="body-container-H80dD" style="flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: 12px; box-sizing: border-box;">\r\n                <div class="addon-details-container-VdGrt" style="width: 100%; box-sizing: border-box;">\r\n                    <div class="section-container-N6QHW" style="width: 100%; line-height: 1.5; padding-bottom: 35px; box-sizing: border-box;">\r\n                        {{ settingsHtml }}\r\n                    </div>\r\n                </div>\r\n            </div>\r\n            \r\n            <div class="buttons-container-e_JoR" style="margin-top: 15px; display: flex; justify-content: flex-end; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1); flex-shrink: 0; box-sizing: border-box;">\r\n                <div tabindex="0" title="Close & Save" class="action-button-eprQG button-container-zVLH6 install-button-container-yfcq5" id="{{ modalId }}-close-btn" style="cursor: pointer; padding: 10px 24px; border-radius: 4px; font-weight: bold; background-color: var(--accent-color, var(--primary-accent-color, #735bf2));">\r\n                    <div class="label-wbfsE" style="color: white;">Close</div>\r\n                </div>\r\n            </div>\r\n        </div>\r\n    </div>\r\n</div>\r\n';
@@ -1048,6 +757,337 @@
       }, 4e3);
     }
   };
+
+  // src/components/theme-item/themeItem.ts
+  function createThemeCard(fileName, meta, isApplied, onApply) {
+    const buttonClass = isApplied ? "uninstall-button-container-oV4Yo disabled" : "install-button-container-yfcq5";
+    const label = isApplied ? "Applied" : "Apply";
+    const deleteDisplay = fileName.toLowerCase() === "default" ? "none" : "flex";
+    const themeDisplayName = meta && meta.name && meta.name.trim().length > 0 ? meta.name.trim() : fileName;
+    const descriptionBlock = meta.description ? `<b>Description:</b> ${escapeHtml(meta.description)}<br>` : "";
+    const authorBlock = meta.author ? `<b>Author:</b> ${escapeHtml(meta.author)}` : "";
+    const html = TemplateCache.render(theme_item_default, {
+      fileName: escapeHtml(fileName),
+      name: escapeHtml(meta.name),
+      version: escapeHtml(meta.version || ""),
+      descriptionBlock,
+      authorBlock,
+      buttonClass,
+      label,
+      deleteDisplay
+    });
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = html.trim();
+    const card = wrapper.firstElementChild;
+    const applyBtn = card.querySelector(".theme-apply-btn");
+    if (applyBtn) {
+      applyBtn.onclick = function() {
+        if (applyBtn.classList.contains("disabled")) return;
+        onApply(fileName);
+      };
+    }
+    const deleteBtn = card.querySelector(".theme-delete-btn");
+    if (deleteBtn && fileName.toLowerCase() !== "default") {
+      const handleDelete = async (e) => {
+        e.stopPropagation();
+        const result = await modalManager.showAlert(
+          "danger",
+          "Delete Theme",
+          `Are you sure you want to delete "${themeDisplayName}" (${fileName})?
+
+This will permanently remove the theme file from your themes folder.`,
+          ["Delete", "Cancel"]
+        );
+        if (result !== 0) return;
+        if (applyBtn?.classList.contains("disabled")) {
+          applyThemeUI("Default");
+        }
+        postEnhancedMessage("deleteMod", {
+          modType: "theme",
+          fileName
+        });
+        card.remove();
+        modalManager.showToast(
+          "theme-deleted",
+          "Theme Deleted",
+          `Deleted ${themeDisplayName}.`,
+          "info"
+        );
+      };
+      deleteBtn.onclick = handleDelete;
+      deleteBtn.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          handleDelete(e);
+        }
+      });
+    }
+    return card;
+  }
+
+  // src/components/marketplace-tab/marketplace-tab.html
+  var marketplace_tab_default = '<div class="marketplace-inline-view" style="width: 100%; box-sizing: border-box;">\n    <div style="margin-bottom: 1rem;">\n        <label title="Search themes/plugins" style="display: flex; align-items: center; background: var(--surface-background-color, rgba(255, 255, 255, 0.06)); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: var(--border-radius, 0.75rem); padding: 0.65rem 1rem; width: 100%; box-sizing: border-box;">\n            <input id="marketplace-search-input" size="1" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" tabindex="0" class="search-input-bAgAh" type="text" placeholder="Search themes and plugins..." value="" style="flex: 1; background: transparent; border: none; outline: none; color: var(--foreground-color-primary, #fff); font-size: 1rem;">\n            <svg viewBox="0 0 512 512" style="width: 1.2rem; height: 1.2rem; fill: rgba(255, 255, 255, 0.6); margin-left: 0.5rem; flex-shrink: 0;">\n                <path d="M456.882 415.7999999999997l-93.791-89.45c22.605-28.67 34.784-63.57 34.686-99.44 0-91.54-78.142-166.07-174.125-166.07s-174.125 74.53-174.125 166.17c0 91.54 78.142 166.07 174.125 166.07 37.586 0 74.161-11.61 104.256-33.08l93.79 89.45c3.535 3.04 7.91 5.05 12.604 5.79 4.696 0.74 9.515 0.18 13.887-1.61 4.374-1.79 8.117-4.74 10.788-8.49 2.671-3.76 4.157-8.17 4.284-12.7 0.108-6.11-2.165-12.04-6.379-16.64m-357.62-188.79c-0.01-29.43 11.453-57.8 32.162-79.61 20.709-21.82 49.183-35.49 79.884-38.39 30.7-2.9 61.433 5.2 86.221 22.72 24.787 17.52 41.858 43.2 47.891 72.05 6.034 28.86 0.598 58.83-15.249 84.07s-40.972 43.96-70.489 52.53c-29.518 8.55-61.317 6.33-89.213-6.24s-49.895-34.57-61.718-61.75c-6.258-14.38-9.483-29.81-9.488-45.38" style="fill: currentcolor;"></path>\n            </svg>\n        </label>\n    </div>\n\n    <div tabindex="0" title="Submit your themes and plugins here" style="margin-bottom: 1.25rem; text-align: center;">\n        <a href="https://github.com/REVENGE977/stremio-enhanced-registry" target="_blank" rel="noreferrer" class="enhanced-link" style="display: block; text-decoration: none;">\n            <span class="enhanced-link-label">Submit your themes and plugins here</span>\n        </a>\n    </div>\n\n    <div id="mods-list" style="display: flex; flex-direction: column; gap: 1rem; width: 100%; box-sizing: border-box;">\n        <div id="marketplace-loading" style="padding: 2.5rem; text-align: center; color: rgba(255, 255, 255, 0.7); font-size: 1.05rem;">\n            Loading community plugins &amp; themes...\n        </div>\n    </div>\n</div>\n';
+
+  // src/components/marketplace-tab/marketplaceTab.ts
+  function getMarketplaceTabHtml() {
+    return TemplateCache.render(marketplace_tab_default, {});
+  }
+
+  // src/components/marketplace-item/marketplace-item.html
+  var marketplace_item_default = '<div name="{{ name }}-box" tabindex="0" class="marketplace-item-card animation-fade-in" style="width: 100%; box-sizing: border-box; margin: 0 0 1rem 0; display: flex; align-items: center; justify-content: space-between; padding: 1.25rem 1.5rem; border-radius: 0.5rem; background-color: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); transition: border-color 0.2s, background-color 0.2s;">\r\n    <div class="marketplace-logo-box" style="width: 4.5rem; height: 4.5rem; flex-shrink: 0; margin-right: 1.25rem; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.35); border-radius: 0.4rem; overflow: hidden; padding: 0.25rem; box-sizing: border-box;">\r\n        {{ logoBlock }}\r\n    </div>\r\n\r\n    <div class="marketplace-info-container" style="flex: 1; min-width: 0; padding-right: 1.5rem; box-sizing: border-box;">\r\n        <div style="display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 0.4rem;">\r\n            <span class="marketplace-title" title="{{ name }}" style="font-size: 1.2rem; font-weight: 700; color: #fff; line-height: 1.35; white-space: normal !important; overflow: visible !important; text-overflow: unset !important; word-break: break-word !important;">{{ name }}</span>\r\n            <span style="font-size: 0.8rem; color: rgba(255, 255, 255, 0.5); font-weight: 500; white-space: nowrap;">v{{ version }}</span>\r\n            <span style="font-size: 0.725rem; text-transform: uppercase; font-weight: 600; padding: 0.15rem 0.5rem; border-radius: 0.25rem; background: rgba(115, 91, 242, 0.25); color: #b4a2f8; border: 1px solid rgba(115, 91, 242, 0.4); white-space: nowrap;">{{ type }}</span>\r\n        </div>\r\n        <div style="font-size: 0.875rem; color: rgba(255, 255, 255, 0.75); line-height: 1.45; word-break: break-word;">\r\n            <div style="margin-bottom: 0.25rem;"><b>Description:</b> {{ description }}</div>\r\n            <div><b>Author:</b> {{ author }}</div>\r\n        </div>\r\n    </div>\r\n    <div class="marketplace-buttons-container" style="width: auto; flex-shrink: 0; display: flex; align-items: center; gap: 0.75rem; margin-left: 1rem;">\r\n        <div class="action-buttons-container-xMVmz">\r\n            <div tabindex="-1" title="{{ actionbtnTitle }}" class="{{ actionbtnClass }} modActionBtn" data-link="{{ download }}" data-type="{{ type }}" style="cursor: pointer; user-select: none; min-width: 6.5rem; text-align: center; padding: 0.55rem 1.25rem; border-radius: 0.35rem; font-weight: 700; font-size: 0.9rem; transition: all 0.2s ease;">\r\n                <div class="label-OnWh2" style="color: white; font-weight: bold;">{{ actionbtnTitle }}</div>\r\n            </div>\r\n        </div>\r\n        {{ repoBlock }}\r\n    </div>\r\n</div>\r\n';
+
+  // src/components/marketplace-item/marketplaceItem.ts
+  function createMarketplaceCard(mod, type, isInstalled, onAction) {
+    let logoBlock = "";
+    if (mod.preview) {
+      logoBlock = `
+            <a href="${escapeHtml(mod.preview)}" target="_blank" rel="noreferrer" style="cursor: zoom-in; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;">
+                <img class="logo-WrsGF" src="${escapeHtml(mod.preview)}" alt="${escapeHtml(mod.name)} Preview" loading="lazy" style="max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px;">
+            </a>`;
+    } else if (type === "Theme") {
+      logoBlock = `
+            <svg viewBox="0 0 24 24" style="width: 2.2rem; height: 2.2rem; fill: currentcolor;">
+                <path d="M4 3h16a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm2 9h6a1 1 0 0 1 1 1v3h1v6h-4v-6h1v-2H5a1 1 0 0 1-1-1v-2h2v1zm11.732 1.732l1.768-1.768 1.768 1.768a2.5 2.5 0 1 1-3.536 0z"></path>
+            </svg>`;
+    } else {
+      logoBlock = `
+            <svg viewBox="0 0 24 24" style="width: 2.2rem; height: 2.2rem; fill: currentcolor;">
+                <path d="M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5C13 2.12 11.88 1 10.5 1S8 2.12 8 3.5V5H4c-1.1 0-1.99.9-1.99 2v3.8H3.5c1.49 0 2.7 1.21 2.7 2.7s-1.21 2.7-2.7 2.7H2V20c0 1.1.9 2 2 2h3.8v-1.5c0-1.49 1.21-2.7 2.7-2.7 1.49 0 2.7 1.21 2.7 2.7V22H17c1.1 0 2-.9 2-2v-4h1.5c1.49 0 2.7-1.21 2.7-2.7s-1.21-2.7-2.7-2.7z"></path>
+            </svg>`;
+    }
+    let repoBlock = "";
+    if (mod.repo) {
+      repoBlock = `
+            <a href="${escapeHtml(mod.repo)}" target="_blank" rel="noreferrer" class="marketplace-repo-btn" style="cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; padding: 0.55rem 1rem; border-radius: 0.35rem; background: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.85); font-size: 0.85rem; font-weight: 500; transition: background 0.2s;">
+                <svg viewBox="0 0 24 24" style="width: 1.15rem; height: 1.15rem; fill: currentcolor; margin-right: 0.4rem; flex-shrink: 0;">
+                    <path d="M12,2A10,10 0 0,0 2,12C2,16.42 4.87,20.17 8.84,21.5C9.34,21.58 9.5,21.27 9.5,21C9.5,20.77 9.5,20.14 9.5,19.31C6.73,19.91 6.14,17.97 6.14,17.97C5.68,16.81 5.03,16.5 5.03,16.5C4.12,15.88 5.1,15.9 5.1,15.9C6.1,15.97 6.63,16.93 6.63,16.93C7.5,18.45 8.97,18 9.54,17.76C9.63,17.11 9.89,16.67 10.17,16.42C7.95,16.17 5.62,15.31 5.62,11.5C5.62,10.39 6,9.5 6.65,8.79C6.55,8.54 6.2,7.5 6.75,6.15C6.75,6.15 7.59,5.88 9.5,7.17C10.29,6.95 11.15,6.84 12,6.84C12.85,6.84 13.71,6.95 14.5,7.17C16.41,5.88 17.25,6.15 17.25,6.15C17.8,7.5 17.45,8.54 17.35,8.79C18,9.5 18.38,10.39 18.38,11.5C18.38,15.32 16.04,16.16 13.81,16.41C14.17,16.72 14.5,17.33 14.5,18.26C14.5,19.6 14.5,20.68 14.5,21C14.5,21.27 14.66,21.59 15.17,21.5C19.14,20.16 22,16.42 22,12A10,10 0 0,0 12,2Z" />
+                </svg>
+                <span>Open repository</span>
+            </a>`;
+    }
+    const actionbtnTitle = isInstalled ? "Uninstall" : "Install";
+    const actionbtnClass = isInstalled ? "uninstall-button-container-oV4Yo" : "install-button-container-yfcq5";
+    const html = TemplateCache.render(marketplace_item_default, {
+      name: escapeHtml(mod.name),
+      version: escapeHtml(mod.version || "1.0.0"),
+      type,
+      description: escapeHtml(mod.description),
+      author: escapeHtml(mod.author),
+      actionbtnTitle,
+      actionbtnClass,
+      download: escapeHtml(mod.download),
+      logoBlock,
+      repoBlock
+    });
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = html.trim();
+    const card = wrapper.querySelector(".marketplace-item-card") || wrapper.firstElementChild;
+    const btn = card.querySelector(".modActionBtn");
+    if (btn) {
+      btn.onclick = async () => {
+        const currentTitle = btn.getAttribute("title");
+        const willInstall = currentTitle === "Install";
+        await onAction(mod, type, willInstall, btn);
+      };
+    }
+    return card;
+  }
+
+  // src/marketplace/marketplaceManager.ts
+  var REGISTRY_URL = "https://raw.githubusercontent.com/REVENGE977/stremio-enhanced-registry/refs/heads/main/registry.json";
+  var currentEnhancedData = {
+    plugins: [],
+    themes: [],
+    activeTheme: null
+  };
+  var cachedRegistry = null;
+  function updateMarketplaceData(data) {
+    currentEnhancedData = data;
+    syncMarketplaceInstalledState();
+  }
+  function getFileNameFromUrl(url) {
+    try {
+      const parsed = new URL(url);
+      const parts = parsed.pathname.split("/");
+      return parts[parts.length - 1] || "";
+    } catch (_) {
+      const clean = url.split("?")[0].split("#")[0];
+      return clean.substring(clean.lastIndexOf("/") + 1);
+    }
+  }
+  function isPluginInstalled(fileName) {
+    const fn = fileName.toLowerCase();
+    return (currentEnhancedData.plugins || []).some((p) => (p.fileName || "").toLowerCase() === fn);
+  }
+  function isThemeInstalled(fileName) {
+    const fn = fileName.toLowerCase();
+    return (currentEnhancedData.themes || []).some((t) => (t.fileName || "").toLowerCase() === fn);
+  }
+  async function fetchRegistry() {
+    if (cachedRegistry) return cachedRegistry;
+    console.log("[Enhanced Marketplace] Fetching registry from:", REGISTRY_URL);
+    const response = await fetch(REGISTRY_URL);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch marketplace registry: HTTP ${response.status}`);
+    }
+    const text = await response.text();
+    const data = JSON.parse(text);
+    cachedRegistry = {
+      plugins: Array.isArray(data.plugins) ? data.plugins : [],
+      themes: Array.isArray(data.themes) ? data.themes : []
+    };
+    console.log(`[Enhanced Marketplace] Loaded registry with ${cachedRegistry.plugins.length} plugins and ${cachedRegistry.themes.length} themes.`);
+    return cachedRegistry;
+  }
+  function setupSearchBar() {
+    const searchInput = document.getElementById("marketplace-search-input");
+    const modsList = document.getElementById("mods-list");
+    if (!searchInput || !modsList) return;
+    searchInput.addEventListener("input", () => {
+      const query = searchInput.value.trim().toLowerCase();
+      const items = modsList.querySelectorAll(".marketplace-item-card, .addon-container-lC5KN");
+      items.forEach((item) => {
+        const name = (item.querySelector(".marketplace-title") || item.querySelector(".name-container-qIAg8"))?.textContent?.toLowerCase() || "";
+        const desc = item.textContent?.toLowerCase() || "";
+        const matches = !query || name.includes(query) || desc.includes(query);
+        item.style.display = matches ? "" : "none";
+      });
+    });
+  }
+  function syncMarketplaceInstalledState() {
+    const modsList = document.getElementById("mods-list");
+    if (!modsList) return;
+    modsList.querySelectorAll(".modActionBtn").forEach((btn) => {
+      const link = btn.getAttribute("data-link") || "";
+      const type = btn.getAttribute("data-type");
+      if (!link || !type) return;
+      const fileName = getFileNameFromUrl(link);
+      const installed = type === "Plugin" ? isPluginInstalled(fileName) : isThemeInstalled(fileName);
+      const label = btn.querySelector(".label-OnWh2") || btn;
+      if (installed) {
+        btn.classList.remove("install-button-container-yfcq5");
+        btn.classList.add("uninstall-button-container-oV4Yo");
+        btn.setAttribute("title", "Uninstall");
+        label.textContent = "Uninstall";
+      } else {
+        btn.classList.remove("uninstall-button-container-oV4Yo");
+        btn.classList.add("install-button-container-yfcq5");
+        btn.setAttribute("title", "Install");
+        label.textContent = "Install";
+      }
+    });
+  }
+  async function renderMarketplaceInline(forceReload = false) {
+    const container = document.getElementById("enhanced-marketplace-content");
+    if (!container) return;
+    if (!forceReload && container.getAttribute("data-loaded") === "true") {
+      syncMarketplaceInstalledState();
+      return;
+    }
+    if (container.getAttribute("data-loading") === "true") return;
+    container.setAttribute("data-loading", "true");
+    container.removeAttribute("data-loaded");
+    container.innerHTML = getMarketplaceTabHtml();
+    setupSearchBar();
+    const modsList = document.getElementById("mods-list");
+    if (!modsList) {
+      container.removeAttribute("data-loading");
+      return;
+    }
+    try {
+      const registry = await fetchRegistry();
+      if (!document.body.contains(modsList)) return;
+      modsList.innerHTML = "";
+      if ((!registry.plugins || registry.plugins.length === 0) && (!registry.themes || registry.themes.length === 0)) {
+        modsList.innerHTML = `
+                <div style="padding: 2.5rem; text-align: center; color: rgba(255,255,255,0.7); font-size: 1.05rem;">
+                    No plugins or themes found in the community registry.
+                </div>
+            `;
+        container.setAttribute("data-loaded", "true");
+        return;
+      }
+      const handleAction = async (mod, type, willInstall, btn) => {
+        const fileName = getFileNameFromUrl(mod.download);
+        const label = btn.querySelector(".label-OnWh2") || btn;
+        if (willInstall) {
+          const prevText = label.textContent;
+          label.textContent = "Installing...";
+          btn.style.pointerEvents = "none";
+          try {
+            const res = await fetch(mod.download);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const content = await res.text();
+            postEnhancedMessage("installMod", {
+              modType: type.toLowerCase(),
+              fileName,
+              content
+            });
+            btn.classList.remove("install-button-container-yfcq5");
+            btn.classList.add("uninstall-button-container-oV4Yo");
+            btn.setAttribute("title", "Uninstall");
+            label.textContent = "Uninstall";
+          } catch (err) {
+            console.error("[Enhanced Marketplace] Install failed:", err);
+            alert(`Failed to install ${mod.name}: ${err?.message || err}`);
+            label.textContent = prevText;
+          } finally {
+            btn.style.pointerEvents = "";
+          }
+        } else {
+          const prevText = label.textContent;
+          label.textContent = "Uninstalling...";
+          btn.style.pointerEvents = "none";
+          try {
+            postEnhancedMessage("deleteMod", {
+              modType: type.toLowerCase(),
+              fileName
+            });
+            btn.classList.remove("uninstall-button-container-oV4Yo");
+            btn.classList.add("install-button-container-yfcq5");
+            btn.setAttribute("title", "Install");
+            label.textContent = "Install";
+          } catch (err) {
+            console.error("[Enhanced Marketplace] Uninstall failed:", err);
+            alert(`Failed to uninstall ${mod.name}: ${err?.message || err}`);
+            label.textContent = prevText;
+          } finally {
+            btn.style.pointerEvents = "";
+          }
+        }
+      };
+      for (const plugin of registry.plugins) {
+        const fileName = getFileNameFromUrl(plugin.download);
+        const installed = isPluginInstalled(fileName);
+        const card = createMarketplaceCard(plugin, "Plugin", installed, handleAction);
+        modsList.appendChild(card);
+      }
+      for (const theme of registry.themes) {
+        const fileName = getFileNameFromUrl(theme.download);
+        const installed = isThemeInstalled(fileName);
+        const card = createMarketplaceCard(theme, "Theme", installed, handleAction);
+        modsList.appendChild(card);
+      }
+      container.setAttribute("data-loaded", "true");
+    } catch (err) {
+      console.error("[Enhanced Marketplace] Failed to load registry:", err);
+      if (!document.body.contains(modsList)) return;
+      modsList.innerHTML = `
+            <div style="padding: 2.5rem; text-align: center; color: #ff6b6b; font-size: 1rem;">
+                Failed to load community marketplace: ${err?.message || err}<br><br>
+                <button id="marketplace-retry-btn" style="padding: 0.5rem 1rem; border-radius: 4px; background: rgba(255,255,255,0.1); color: #fff; cursor: pointer; border: none;">
+                    Retry
+                </button>
+            </div>
+        `;
+      document.getElementById("marketplace-retry-btn")?.addEventListener("click", () => {
+        cachedRegistry = null;
+        renderMarketplaceInline(true);
+      });
+    } finally {
+      container.removeAttribute("data-loading");
+    }
+  }
 
   // src/updates/updateManager.ts
   var currentEnhancedData2 = { plugins: [], themes: [], activeTheme: null };

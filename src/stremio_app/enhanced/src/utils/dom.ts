@@ -108,7 +108,8 @@ export function injectFallbackStyles(): void {
         .plugin-settings-btn:hover {
             background-color: rgba(255, 255, 255, 0.16) !important;
         }
-        .plugin-delete-btn:hover {
+        .plugin-delete-btn:hover,
+        .theme-delete-btn:hover {
             background-color: rgba(220, 38, 38, 0.22) !important;
             color: #ff6b6b !important;
         }
