@@ -13,7 +13,14 @@ fn main() {
     let copyright = format!("Copyright © {} REVENGE977 & Smart Code OOD", now.year());
     let pkg_name = env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "stremio-enhanced-ng".to_string());
     let pkg_version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "5.0.27".to_string());
-    let win_version = format!("{pkg_version}.0");
+    let base_version = pkg_version.split('-').next().unwrap_or("5.0.27");
+    let enhanced_build = pkg_version
+        .split("-enhanced.")
+        .nth(1)
+        .and_then(|s| s.split('.').next())
+        .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+        .unwrap_or("0");
+    let win_version = format!("{base_version}.{enhanced_build}");
     let exe_name = format!("{pkg_name}.exe");
     let target = std::env::var("TARGET").unwrap();
     let (manifest_arch, arch, archive, flags) = match target.as_str() {
