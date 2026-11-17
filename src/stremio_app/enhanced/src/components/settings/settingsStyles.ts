@@ -16,7 +16,8 @@ export const SETTINGS_STYLES = `
 #enhanced[data-show="themes"] > .enhanced-category:not([data-category="themes"]),
 #enhanced[data-show="plugins"] > .enhanced-category:not([data-category="plugins"]),
 #enhanced[data-show="marketplace"] > .enhanced-category:not([data-category="marketplace"]),
-#enhanced[data-show="server"] > .enhanced-category:not([data-category="server"]) { display: none; }
+#enhanced[data-show="server"] > .enhanced-category:not([data-category="server"]),
+#enhanced[data-show="updates"] > .enhanced-category:not([data-category="updates"]) { display: none; }
 
 .enhanced-option {
     display: flex;

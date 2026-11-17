@@ -1,7 +1,6 @@
-<<<<<<< HEAD
 import { SETTINGS_STYLES, SETTINGS_STYLE_ID } from './settingsStyles';
-import { waitForElement, postEnhancedMessage } from '../../utils/dom';
-import { THEME_ICON, PLUGIN_ICON, MARKETPLACE_ICON, SERVER_ICON } from '../../utils/icons';
+import { escapeHtml, waitForElement, postEnhancedMessage } from '../../utils/dom';
+import { THEME_ICON, PLUGIN_ICON, MARKETPLACE_ICON, SERVER_ICON, UPDATE_ICON } from '../../utils/icons';
 import { renderThemesList } from '../../themes/themeManager';
 import { renderPluginsList, toggleAllPlugins } from '../../plugins/pluginManager';
 import { renderMarketplaceInline } from '../../marketplace/marketplaceManager';
@@ -13,6 +12,14 @@ import {
     startStreamingServer,
     reloadToLocalStreamingServer
 } from '../../server/serverManager';
+import {
+    checkClientUpdate,
+    fetchLatestClientVersion,
+    getCurrentClientVersion,
+    getLatestClientVersion,
+    isNewerVersion,
+    CLIENT_RELEASES_URL
+} from '../../updates/updateManager';
 
 // Settings page (Stremio Web 5.1+): a sidebar of link groups next to a pane showing one page.
 // Matched by class-name prefix, because the hash suffixes change with every Stremio Web build.
@@ -164,6 +171,7 @@ function buildNavGroup(): Promise<void> {
                 { id: 'plugins', label: 'Plugins', icon: PLUGIN_ICON },
                 { id: 'marketplace', label: 'Marketplace', icon: MARKETPLACE_ICON },
                 { id: 'server', label: 'Streaming Server', icon: SERVER_ICON },
+                { id: 'updates', label: 'Client Updates', icon: UPDATE_ICON },
             ];
 
             for (const item of items) {
@@ -318,11 +326,56 @@ function buildSettingsPage(): Promise<void> {
             serverCategory.appendChild(serverStatusInfo);
             page.appendChild(serverCategory);
 
+            // Client Updates Category
+            const updatesCategory = createCategory('enhanced-updates-category', 'updates', 'Client Updates', sampleGroup);
+            const checkClientUpdatesBtn = createOptionButton('checkclientupdatesBtn', 'Check for Client Updates');
+            const openClientReleasesBtn = createOptionButton('openclientreleasesBtn', 'View Releases');
+            openClientReleasesBtn.setAttribute('title', 'View Releases on GitHub');
+
+            const clientVersionInfo = document.createElement('div');
+            clientVersionInfo.id = 'enhanced-client-version-info';
+            clientVersionInfo.style.cssText = 'font-size: 0.9rem; color: #a0a0a0; margin-top: 0.5rem; margin-left: 0.2rem;';
+
+            const renderClientVersionInfo = () => {
+                const currentVer = getCurrentClientVersion();
+                const latest = getLatestClientVersion();
+                if (!latest) {
+                    clientVersionInfo.innerHTML = `<span style="color: #ddd; font-weight: 600;">Installed Version:</span> v${escapeHtml(currentVer)}`;
+                    return;
+                }
+                const hasUpdate = isNewerVersion(latest.version, currentVer);
+                const badge = hasUpdate
+                    ? `<span style="color: #fcc419; font-weight: 600;">● Update available: v${escapeHtml(latest.version)}</span>`
+                    : `<span style="color: #51cf66;">● Up to date (v${escapeHtml(latest.version)})</span>`;
+                clientVersionInfo.innerHTML = `<span style="color: #ddd; font-weight: 600;">Installed Version:</span> v${escapeHtml(currentVer)} &bull; ${badge}`;
+            };
+
+            checkClientUpdatesBtn.onclick = async () => {
+                await checkClientUpdate(true);
+                renderClientVersionInfo();
+            };
+
+            openClientReleasesBtn.onclick = () => {
+                const url = getLatestClientVersion()?.releaseUrl || CLIENT_RELEASES_URL;
+                try {
+                    window.open(url, '_blank');
+                } catch (_) {}
+            };
+
+            updatesCategory.appendChild(createOptionRow([checkClientUpdatesBtn, openClientReleasesBtn]));
+            updatesCategory.appendChild(clientVersionInfo);
+            page.appendChild(updatesCategory);
+
             container.appendChild(page);
             pane.appendChild(container);
 
             renderServerInfo(getCurrentServerStatus());
             getServerStatus().then(renderServerInfo);
+
+            renderClientVersionInfo();
+            if (!getLatestClientVersion()) {
+                fetchLatestClientVersion().then(() => renderClientVersionInfo());
+            }
 
             renderThemesList((fileName) => {
                 (window as any).StremioEnhancedAPI.applyTheme(fileName);
@@ -342,17 +395,6 @@ function buildSettingsPage(): Promise<void> {
 // hashchange arriving meanwhile must not start another build.
 let isBuilding = false;
 let buildStartedAt = 0;
-=======
-import settingsSectionTemplate from './settings-section.html';
-import { TemplateCache } from '../../utils/templateCache';
-import { escapeHtml, waitForElement, postEnhancedMessage } from '../../utils/dom';
-import { THEME_ICON, PLUGIN_ICON, MARKETPLACE_ICON, SERVER_ICON, UPDATE_ICON } from '../../utils/icons';
-import { renderThemesList } from '../../themes/themeManager';
-import { renderPluginsList } from '../../plugins/pluginManager';
-import { browseMarketplace } from '../../marketplace/marketplaceManager';
-import { openStreamingServerFolder, checkServerJsUpdateAndSetup, getCurrentServerStatus, getServerStatus, startStreamingServer, reloadToLocalStreamingServer } from '../../server/serverManager';
-import { checkClientUpdate, fetchLatestClientVersion, getCurrentClientVersion, getLatestClientVersion, isNewerVersion, CLIENT_RELEASES_URL } from '../../updates/updateManager';
->>>>>>> d1f883d70319c3a58564953f799a1922cee2f127
 
 export function checkSettings(): void {
     if (!location.href.includes('#/settings')) {
@@ -378,236 +420,3 @@ export function checkSettings(): void {
         isBuilding = false;
     });
 }
-<<<<<<< HEAD
-=======
-
-function injectNav(): void {
-    waitForElement('[title="Shortcuts"]', 5000).then(shortcutsNav => {
-        if (document.getElementById('enhanced-nav-btn')) return;
-        const menu = shortcutsNav.parentElement;
-        if (!menu) return;
-
-        const enhancedNav = document.createElement('div');
-        enhancedNav.className = shortcutsNav.className;
-        enhancedNav.setAttribute('tabindex', '0');
-        enhancedNav.setAttribute('title', 'Enhanced');
-        enhancedNav.setAttribute('data-section', 'enhanced');
-        enhancedNav.id = 'enhanced-nav-btn';
-        enhancedNav.textContent = 'Enhanced';
-        enhancedNav.style.cursor = 'pointer';
-        enhancedNav.style.outline = 'none';
-        enhancedNav.style.fontSize = '1.1rem';
-
-        enhancedNav.addEventListener('click', () => {
-            const target = document.getElementById('enhanced');
-            if (target) {
-                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                setActiveNav(enhancedNav);
-            }
-        });
-
-        shortcutsNav.insertAdjacentElement('afterend', enhancedNav);
-
-        const targetSection = document.getElementById('enhanced');
-        if (targetSection) {
-            setupScrollObserver(enhancedNav, targetSection);
-        }
-    }).catch(err => {
-        console.warn('[Enhanced] Shortcuts nav item not found:', err);
-    });
-}
-
-function setActiveNav(navBtn: HTMLElement): void {
-    const menu = navBtn.parentElement;
-    if (!menu) return;
-    let selectedClass = 'selected-S7SeK';
-    menu.querySelectorAll('*').forEach(el => {
-        el.classList.forEach(cls => {
-            if (cls.includes('selected')) {
-                selectedClass = cls;
-                el.classList.remove(cls);
-            }
-        });
-    });
-    navBtn.classList.add(selectedClass);
-}
-
-function setupScrollObserver(navBtn: HTMLElement, section: HTMLElement): void {
-    const observer = new IntersectionObserver(entries => {
-        entries.forEach(entry => {
-            if (entry.isIntersecting) {
-                setActiveNav(navBtn);
-            } else {
-                navBtn.classList.forEach(cls => {
-                    if (cls.includes('selected')) navBtn.classList.remove(cls);
-                });
-            }
-        });
-    }, { threshold: 0.1 });
-    observer.observe(section);
-}
-
-function injectSection(sectionsContainer: Element): void {
-    const html = TemplateCache.render(settingsSectionTemplate, {
-        themeIcon: THEME_ICON,
-        pluginIcon: PLUGIN_ICON,
-        marketplaceIcon: MARKETPLACE_ICON,
-        serverIcon: SERVER_ICON,
-        updateIcon: UPDATE_ICON
-    });
-
-    const wrapper = document.createElement('div');
-    wrapper.innerHTML = html.trim();
-    const sectionDiv = wrapper.firstElementChild as HTMLElement;
-
-    // Adapt class names from sibling sections if available
-    const sampleSection = document.querySelector('[class*="section-"]');
-    if (sampleSection) {
-        sectionDiv.className = sampleSection.className;
-        const sampleLabel = sampleSection.querySelector(':scope > [class*="label-"]');
-        const titleDiv = sectionDiv.querySelector('.label-wXG3e') as HTMLElement;
-        if (titleDiv) {
-            if (sampleLabel) {
-                titleDiv.className = sampleLabel.className;
-            }
-            titleDiv.style.fontSize = '1.8rem';
-            titleDiv.style.fontWeight = '700';
-            titleDiv.style.lineHeight = '3.4rem';
-            titleDiv.style.marginBottom = '2rem';
-        }
-    }
-
-    const openThemesBtn = sectionDiv.querySelector<HTMLElement>('#openthemesfolderBtn');
-    if (openThemesBtn) {
-        openThemesBtn.onclick = () => {
-            (window as any).StremioEnhancedAPI.openThemesFolder();
-        };
-    }
-
-    const openPluginsBtn = sectionDiv.querySelector<HTMLElement>('#openpluginsfolderBtn');
-    if (openPluginsBtn) {
-        openPluginsBtn.onclick = () => {
-            (window as any).StremioEnhancedAPI.openPluginsFolder();
-        };
-    }
-
-    const browseMarketplaceBtn = sectionDiv.querySelector<HTMLElement>('#browsePluginsThemesBtn');
-    if (browseMarketplaceBtn) {
-        browseMarketplaceBtn.onclick = () => {
-            browseMarketplace();
-        };
-    }
-
-    const openServerFolderBtn = sectionDiv.querySelector<HTMLElement>('#openserverfolderBtn');
-    if (openServerFolderBtn) {
-        openServerFolderBtn.onclick = () => {
-            openStreamingServerFolder();
-        };
-    }
-
-    const checkServerUpdatesBtn = sectionDiv.querySelector<HTMLElement>('#checkserverupdatesBtn');
-    if (checkServerUpdatesBtn) {
-        checkServerUpdatesBtn.onclick = () => {
-            checkServerJsUpdateAndSetup(true).then(() => {
-                const updated = getCurrentServerStatus();
-                if (serverStatusInfo) renderServerInfo(updated);
-            });
-        };
-    }
-
-    const serverStatusInfo = sectionDiv.querySelector<HTMLElement>('#enhanced-server-status-info');
-    const renderServerInfo = (status: any) => {
-        if (!serverStatusInfo) return;
-        if (!status || !status.exists) {
-            serverStatusInfo.innerHTML = `<span style="color: #ff6b6b; font-weight: 600;">Status:</span> Not installed / missing (server.js required)`;
-        } else {
-            const ver = status.currentVersion ? `v${status.currentVersion.replace(/^v/, '')}` : 'Installed';
-            const runningBadge = status.running
-                ? '<span style="color: #51cf66;">● Running</span>'
-                : '<span style="color: #fcc419;">● Stopped</span>';
-            const actionBtn = (status.running && window.location.hostname !== '127.0.0.1')
-                ? `<button id="enhanced-switch-to-local-btn" style="margin-left: 0.8rem; cursor: pointer; padding: 0.3rem 0.8rem; background: #5c7cfa; color: #fff; border: none; border-radius: 4px; font-weight: 600;">Switch to Local Server (127.0.0.1)</button>`
-                : (!status.running)
-                ? `<button id="enhanced-start-server-btn" style="margin-left: 0.8rem; cursor: pointer; padding: 0.3rem 0.8rem; background: #51cf66; color: #111; border: none; border-radius: 4px; font-weight: 600;">Start Server</button>`
-                : '';
-            serverStatusInfo.innerHTML = `<span style="color: #ddd; font-weight: 600;">Status:</span> ${ver} (${runningBadge}) &bull; <span style="color: #888; font-size: 0.85rem;">${status.serverDir}</span>${actionBtn}`;
-
-            const startBtn = serverStatusInfo.querySelector<HTMLElement>('#enhanced-start-server-btn');
-            if (startBtn) {
-                startBtn.onclick = async () => {
-                    startBtn.textContent = 'Starting...';
-                    await startStreamingServer();
-                    const updated = await getServerStatus();
-                    renderServerInfo(updated);
-                };
-            }
-            const switchLocalBtn = serverStatusInfo.querySelector<HTMLElement>('#enhanced-switch-to-local-btn');
-            if (switchLocalBtn) {
-                switchLocalBtn.onclick = () => {
-                    reloadToLocalStreamingServer();
-                };
-            }
-        }
-    };
-
-    if (serverStatusInfo) {
-        renderServerInfo(getCurrentServerStatus());
-        getServerStatus().then(renderServerInfo);
-    }
-
-    const clientVersionInfo = sectionDiv.querySelector<HTMLElement>('#enhanced-client-version-info');
-    const renderClientVersionInfo = () => {
-        if (!clientVersionInfo) return;
-        const currentVer = getCurrentClientVersion();
-        const latest = getLatestClientVersion();
-        if (!latest) {
-            clientVersionInfo.innerHTML = `<span style="color: #ddd; font-weight: 600;">Installed Version:</span> v${escapeHtml(currentVer)}`;
-            return;
-        }
-        const hasUpdate = isNewerVersion(latest.version, currentVer);
-        const badge = hasUpdate
-            ? `<span style="color: #fcc419; font-weight: 600;">● Update available: v${escapeHtml(latest.version)}</span>`
-            : `<span style="color: #51cf66;">● Up to date (v${escapeHtml(latest.version)})</span>`;
-        clientVersionInfo.innerHTML = `<span style="color: #ddd; font-weight: 600;">Installed Version:</span> v${escapeHtml(currentVer)} &bull; ${badge}`;
-    };
-
-    const checkClientUpdatesBtn = sectionDiv.querySelector<HTMLElement>('#checkclientupdatesBtn');
-    if (checkClientUpdatesBtn) {
-        checkClientUpdatesBtn.onclick = async () => {
-            await checkClientUpdate(true);
-            renderClientVersionInfo();
-        };
-    }
-
-    const openClientReleasesBtn = sectionDiv.querySelector<HTMLElement>('#openclientreleasesBtn');
-    if (openClientReleasesBtn) {
-        openClientReleasesBtn.onclick = () => {
-            const url = getLatestClientVersion()?.releaseUrl || CLIENT_RELEASES_URL;
-            try {
-                window.open(url, '_blank');
-            } catch (_) {}
-        };
-    }
-
-    if (clientVersionInfo) {
-        renderClientVersionInfo();
-        if (!getLatestClientVersion()) {
-            fetchLatestClientVersion().then(() => renderClientVersionInfo());
-        }
-    }
-
-    sectionsContainer.appendChild(sectionDiv);
-
-    renderThemesList((fileName) => {
-        (window as any).StremioEnhancedAPI.applyTheme(fileName);
-    });
-    renderPluginsList((fileName, enabled) => {
-        (window as any).StremioEnhancedAPI.togglePlugin(fileName, enabled);
-    });
-
-    const navBtn = document.getElementById('enhanced-nav-btn');
-    if (navBtn) {
-        setupScrollObserver(navBtn, sectionDiv);
-    }
-}
->>>>>>> d1f883d70319c3a58564953f799a1922cee2f127

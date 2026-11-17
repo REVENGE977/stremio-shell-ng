@@ -1,10 +1,6 @@
 [package]
 name = "stremio-enhanced-ng"
-<<<<<<< HEAD
-version = "5.0.27-enhanced.5"
-=======
 version = "5.0.27-enhanced.4"
->>>>>>> d1f883d70319c3a58564953f799a1922cee2f127
 edition = "2018"
 authors = ["REVENGE977", "Smart Code OOD"]
 
