@@ -27,7 +27,10 @@ use crate::stremio_app::{
     enhanced::{theme_injection_script, EnhancedAction, EnhancedManager},
     ipc::{CacheDirectoryRequest, RPCRequest, RPCResponse},
     splash::SplashImage,
-    stremio_player::Player,
+    stremio_player::{
+        thumbnailer::{spawn_thumbnail_worker, ThumbnailCmd, DEFAULT_THUMB_MAX_WIDTH},
+        CmdVal, InMsg, InMsgArgs, InMsgFn, Player,
+    },
     stremio_server::{ensure_ffmpeg_available, is_streaming_server_online, ServerEvent, StremioServer},
     stremio_wevbiew::{WebView, WebViewCommand},
     systray::SystemTray,
@@ -282,9 +285,32 @@ impl MainWindow {
             spawn_single_instance_listener(listener, self.focus_notice.sender(), open_sender.clone());
         }
 
+        let initial_thumb_enabled = self.enhanced.lock().unwrap().settings.thumbnail_preview;
+        let (thumbnail_tx, _thumbnail_handle) =
+            spawn_thumbnail_worker(self.webview.get_command_sender(), initial_thumb_enabled);
+        let active_stream_url: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
         // Forward messages from player to WebView
+        let thumbnail_tx_player = thumbnail_tx.clone();
+        let active_stream_url_player = active_stream_url.clone();
         thread::spawn(move || {
             for msg in player_rx.iter() {
+                if msg.contains("mpv-event-video-ready") {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg) {
+                        let is_ready = v
+                            .get("args")
+                            .and_then(|a| a.get(1))
+                            .and_then(|p| p.get("ready"))
+                            .and_then(|r| r.as_bool())
+                            .unwrap_or(false);
+                        if is_ready {
+                            let url = active_stream_url_player.lock().unwrap().clone();
+                            let _ = thumbnail_tx_player.send(ThumbnailCmd::SetSource(url));
+                        }
+                    }
+                } else if msg.contains("mpv-event-ended") {
+                    let _ = thumbnail_tx_player.send(ThumbnailCmd::SetSource(None));
+                }
                 web_tx_player.send(msg).ok();
             }
         });
@@ -296,6 +322,8 @@ impl MainWindow {
             open_sender,
             webview_cmd_tx: self.webview.get_command_sender(),
             enhanced: self.enhanced.clone(),
+            thumbnail_tx,
+            active_stream_url,
             discord_rpc: DiscordRpc::new(web_tx.clone()),
             toggle_fullscreen_sender: self.toggle_fullscreen_notice.sender(),
             set_interface_scale_sender: self.set_interface_scale_notice.sender(),
@@ -707,6 +735,8 @@ struct IpcBridgeContext {
     open_sender: flume::Sender<OpenRequest>,
     webview_cmd_tx: flume::Sender<WebViewCommand>,
     enhanced: Arc<Mutex<EnhancedManager>>,
+    thumbnail_tx: flume::Sender<ThumbnailCmd>,
+    active_stream_url: Arc<Mutex<Option<String>>>,
     discord_rpc: DiscordRpc,
     toggle_fullscreen_sender: nwg::NoticeSender,
     set_interface_scale_sender: nwg::NoticeSender,
@@ -1016,6 +1046,23 @@ fn handle_enhanced_action(action: EnhancedAction, ctx: &IpcBridgeContext) {
             *ctx.requested_pip_resize.lock().unwrap() = Some(direction);
             ctx.pip_resize_sender.notice();
         }
+        EnhancedAction::RequestThumbnail { time, max_width } => {
+            let _ = ctx.thumbnail_tx.send(ThumbnailCmd::Request {
+                time_sec: time,
+                max_width: max_width.unwrap_or(DEFAULT_THUMB_MAX_WIDTH),
+            });
+        }
+        EnhancedAction::SetThumbnailPreview { enabled } => {
+            let mut mgr = ctx.enhanced.lock().unwrap();
+            mgr.set_thumbnail_preview(enabled);
+            let _ = ctx.thumbnail_tx.send(ThumbnailCmd::SetEnabled(enabled));
+            if enabled {
+                if let Some(url) = ctx.active_stream_url.lock().unwrap().clone() {
+                    let _ = ctx.thumbnail_tx.send(ThumbnailCmd::SetSource(Some(url)));
+                }
+            }
+            send_enhanced_ui_data(&mgr, &ctx.webview_cmd_tx);
+        }
     }
 }
 
@@ -1183,6 +1230,21 @@ fn handle_rpc_request(msg: RPCRequest, ctx: &IpcBridgeContext) {
         Some(player_command) if player_command.starts_with("mpv-") => {
             if let Some(args) = msg.args {
                 if let Ok(resp_json) = serde_json::to_string(&args) {
+                    if let Ok(InMsg(InMsgFn::MpvCommand, InMsgArgs::Cmd(cmd))) =
+                        serde_json::from_str::<InMsg>(&resp_json)
+                    {
+                        match &cmd {
+                            CmdVal::Loadfile(url) | CmdVal::LoadfileAt(url, _) => {
+                                *ctx.active_stream_url.lock().unwrap() = Some(url.clone());
+                                let _ = ctx.thumbnail_tx.send(ThumbnailCmd::SetSource(None));
+                            }
+                            CmdVal::Stop => {
+                                *ctx.active_stream_url.lock().unwrap() = None;
+                                let _ = ctx.thumbnail_tx.send(ThumbnailCmd::SetSource(None));
+                            }
+                            _ => {}
+                        }
+                    }
                     ctx.player_tx.send(resp_json).ok();
                 }
             }
