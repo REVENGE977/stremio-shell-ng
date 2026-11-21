@@ -1671,7 +1671,7 @@ dependencies = [
 
 [[package]]
 name = "stremio-enhanced-ng"
-version = "5.0.27-enhanced.4"
+version = "5.0.27-enhanced.5"
 dependencies = [
  "anyhow",
  "base64",
