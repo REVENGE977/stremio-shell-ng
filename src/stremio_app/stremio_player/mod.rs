@@ -1,5 +1,5 @@
 pub mod player;
-pub use player::Player;
+pub use player::{get_chapters, get_playback_stats, set_glsl_shaders, Player};
 pub mod thumbnailer;
 pub mod communication;
 pub use communication::{

@@ -1,10 +1,26 @@
 import { SETTINGS_STYLES, SETTINGS_STYLE_ID } from './settingsStyles';
 import { escapeHtml, waitForElement, postEnhancedMessage } from '../../utils/dom';
-import { THEME_ICON, PLUGIN_ICON, MARKETPLACE_ICON, SERVER_ICON, UPDATE_ICON, PLAYER_ICON } from '../../utils/icons';
+import { THEME_ICON, PLUGIN_ICON, MARKETPLACE_ICON, SERVER_ICON, UPDATE_ICON, PLAYER_ICON, GENERAL_ICON } from '../../utils/icons';
 import { renderThemesList } from '../../themes/themeManager';
 import { renderPluginsList, toggleAllPlugins } from '../../plugins/pluginManager';
 import { renderMarketplaceInline } from '../../marketplace/marketplaceManager';
-import { isThumbnailPreviewEnabled, syncThumbnailPreviewToggle } from '../../player/thumbnailPreview';
+import {
+    isThumbnailPreviewEnabled,
+    syncThumbnailPreviewToggle,
+    isThumbnailPrecacheEnabled,
+    syncThumbnailPrecacheToggle,
+    getThumbnailPreviewSize,
+    syncThumbnailPreviewSizeSelect
+} from '../../player/thumbnailPreview';
+import { isChapterMarkersEnabled, syncChapterMarkersToggle } from '../../player/chapterMarkers';
+import { syncShaderSettingsUI } from '../../player/shaderControls';
+import {
+    isDiscordRpcEnabled,
+    syncDiscordRpcToggle,
+    setDiscordRpc,
+    exportEnhancedSetup,
+    importEnhancedSetup
+} from '../../settings/enhancedSettings';
 import {
     openStreamingServerFolder,
     checkServerJsUpdateAndSetup,
@@ -19,6 +35,8 @@ import {
     getCurrentClientVersion,
     getLatestClientVersion,
     isNewerVersion,
+    renderPatchNotesMarkdown,
+    showPatchNotesModal,
     CLIENT_RELEASES_URL
 } from '../../updates/updateManager';
 
@@ -172,6 +190,7 @@ function buildNavGroup(): Promise<void> {
                 { id: 'plugins', label: 'Plugins', icon: PLUGIN_ICON },
                 { id: 'marketplace', label: 'Marketplace', icon: MARKETPLACE_ICON },
                 { id: 'player', label: 'Player', icon: PLAYER_ICON },
+                { id: 'general', label: 'General', icon: GENERAL_ICON },
                 { id: 'server', label: 'Streaming Server', icon: SERVER_ICON },
                 { id: 'updates', label: 'Client Updates', icon: UPDATE_ICON },
             ];
@@ -272,8 +291,18 @@ function buildSettingsPage(): Promise<void> {
             marketplaceCategory.appendChild(marketplaceContent);
             page.appendChild(marketplaceCategory);
 
-            // Player Category (ThumbFast Thumbnail Preview)
+            // Player Category (ThumbFast, Chapter Markers, Stats HUD, GLSL Shaders)
             const playerCategory = createCategory('enhanced-player-category', 'player', 'Player', sampleGroup);
+
+            const createPlayerSubsection = (title: string): HTMLElement => {
+                const sub = document.createElement('div');
+                sub.className = 'enhanced-subsection-title';
+                sub.textContent = title;
+                return sub;
+            };
+
+            playerCategory.appendChild(createPlayerSubsection('Playback & Overlay'));
+
             const thumbOption = document.createElement('div');
             thumbOption.className = 'enhanced-option';
 
@@ -322,7 +351,265 @@ function buildSettingsPage(): Promise<void> {
             thumbOption.appendChild(thumbHeading);
             thumbOption.appendChild(thumbContent);
             playerCategory.appendChild(thumbOption);
+
+            // Thumbnail Preview Size option
+            const thumbSizeOption = document.createElement('div');
+            thumbSizeOption.className = 'enhanced-option';
+
+            const thumbSizeHeading = document.createElement('div');
+            thumbSizeHeading.className = 'enhanced-option-heading';
+            const thumbSizeLabel = document.createElement('div');
+            thumbSizeLabel.className = 'enhanced-option-label';
+            thumbSizeLabel.textContent = 'Thumbnail Preview Size';
+            const thumbSizeDesc = document.createElement('div');
+            thumbSizeDesc.style.cssText = 'font-size: 0.85rem; color: rgba(255, 255, 255, 0.55); margin-top: 0.25rem;';
+            thumbSizeDesc.textContent = 'Width of the seek-bar preview popup in standard player mode.';
+            thumbSizeHeading.appendChild(thumbSizeLabel);
+            thumbSizeHeading.appendChild(thumbSizeDesc);
+
+            const thumbSizeContent = document.createElement('div');
+            thumbSizeContent.className = 'enhanced-option-content';
+
+            const thumbSizeSelect = document.createElement('select');
+            thumbSizeSelect.id = 'thumbnailpreviewSizeSelect';
+            thumbSizeSelect.className = 'enhanced-select';
+            thumbSizeSelect.setAttribute('title', 'Thumbnail Preview Size');
+            [
+                { value: '160', label: 'Small (160px)' },
+                { value: '240', label: 'Medium (240px)' },
+                { value: '320', label: 'Large (320px)' },
+            ].forEach(optData => {
+                const opt = document.createElement('option');
+                opt.value = optData.value;
+                opt.textContent = optData.label;
+                thumbSizeSelect.appendChild(opt);
+            });
+            thumbSizeSelect.value = String(getThumbnailPreviewSize());
+            thumbSizeSelect.addEventListener('change', () => {
+                const parsed = Number(thumbSizeSelect.value);
+                if (Number.isFinite(parsed) && parsed > 0) {
+                    postEnhancedMessage('setThumbnailPreviewSize', { size: parsed });
+                }
+            });
+
+            thumbSizeContent.appendChild(thumbSizeSelect);
+            thumbSizeOption.appendChild(thumbSizeHeading);
+            thumbSizeOption.appendChild(thumbSizeContent);
+            playerCategory.appendChild(thumbSizeOption);
+
+            // Background Pre-cache toggle option
+            const precacheOption = document.createElement('div');
+            precacheOption.className = 'enhanced-option';
+
+            const precacheHeading = document.createElement('div');
+            precacheHeading.className = 'enhanced-option-heading';
+            const precacheLabel = document.createElement('div');
+            precacheLabel.className = 'enhanced-option-label';
+            precacheLabel.textContent = 'Pre-cache Thumbnails';
+            const precacheDesc = document.createElement('div');
+            precacheDesc.style.cssText = 'font-size: 0.85rem; color: rgba(255, 255, 255, 0.55); margin-top: 0.25rem;';
+            precacheDesc.textContent = 'Pre-load sparse preview frames in the background on direct/HTTP streams for instant scrubbing (skipped for P2P torrents).';
+            precacheHeading.appendChild(precacheLabel);
+            precacheHeading.appendChild(precacheDesc);
+
+            const precacheContent = document.createElement('div');
+            precacheContent.className = 'enhanced-option-content';
+
+            const precacheToggle = document.createElement('div');
+            precacheToggle.id = 'thumbnailprecacheToggle';
+            precacheToggle.setAttribute('tabindex', '0');
+            precacheToggle.setAttribute('role', 'switch');
+            precacheToggle.setAttribute('title', 'Pre-cache Thumbnails');
+            precacheToggle.className = `toggle-container-lZfHP button-container-zVLH6${isThumbnailPrecacheEnabled() ? ' checked' : ''}`;
+            precacheToggle.setAttribute('aria-checked', isThumbnailPrecacheEnabled() ? 'true' : 'false');
+            precacheToggle.style.cssText = 'outline: none; cursor: pointer;';
+
+            const precacheKnob = document.createElement('div');
+            precacheKnob.className = 'toggle-toOWM';
+            precacheToggle.appendChild(precacheKnob);
+
+            const onToggleThumbPrecache = () => {
+                const next = !isThumbnailPrecacheEnabled();
+                precacheToggle.classList.toggle('checked', next);
+                precacheToggle.setAttribute('aria-checked', next ? 'true' : 'false');
+                postEnhancedMessage('setThumbnailPrecache', { enabled: next });
+            };
+            precacheToggle.addEventListener('click', onToggleThumbPrecache);
+            precacheToggle.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onToggleThumbPrecache();
+                }
+            });
+
+            precacheContent.appendChild(precacheToggle);
+            precacheOption.appendChild(precacheHeading);
+            precacheOption.appendChild(precacheContent);
+            playerCategory.appendChild(precacheOption);
+
+            // Chapter Markers toggle
+            const chapterOption = document.createElement('div');
+            chapterOption.className = 'enhanced-option';
+
+            const chapterHeading = document.createElement('div');
+            chapterHeading.className = 'enhanced-option-heading';
+            const chapterLabel = document.createElement('div');
+            chapterLabel.className = 'enhanced-option-label';
+            chapterLabel.textContent = 'Chapter Markers on Seek Bar';
+            const chapterDesc = document.createElement('div');
+            chapterDesc.className = 'enhanced-option-description';
+            chapterDesc.textContent = 'Show chapter ticks on the seek bar, chapter titles in tooltips, and skip chapters with Alt+Left / Alt+Right.';
+            chapterHeading.appendChild(chapterLabel);
+            chapterHeading.appendChild(chapterDesc);
+
+            const chapterContent = document.createElement('div');
+            chapterContent.className = 'enhanced-option-content';
+
+            const chapterToggle = document.createElement('div');
+            chapterToggle.id = 'chaptermarkersToggle';
+            chapterToggle.setAttribute('tabindex', '0');
+            chapterToggle.setAttribute('role', 'switch');
+            chapterToggle.setAttribute('title', 'Chapter Markers on Seek Bar');
+            chapterToggle.className = `toggle-container-lZfHP button-container-zVLH6${isChapterMarkersEnabled() ? ' checked' : ''}`;
+            chapterToggle.setAttribute('aria-checked', isChapterMarkersEnabled() ? 'true' : 'false');
+            chapterToggle.style.cssText = 'outline: none; cursor: pointer;';
+
+            const chapterKnob = document.createElement('div');
+            chapterKnob.className = 'toggle-toOWM';
+            chapterToggle.appendChild(chapterKnob);
+
+            const onToggleChapterMarkers = () => {
+                const next = !isChapterMarkersEnabled();
+                chapterToggle.classList.toggle('checked', next);
+                chapterToggle.setAttribute('aria-checked', next ? 'true' : 'false');
+                postEnhancedMessage('setChapterMarkers', { enabled: next });
+            };
+            chapterToggle.addEventListener('click', onToggleChapterMarkers);
+            chapterToggle.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onToggleChapterMarkers();
+                }
+            });
+
+            chapterContent.appendChild(chapterToggle);
+            chapterOption.appendChild(chapterHeading);
+            chapterOption.appendChild(chapterContent);
+            playerCategory.appendChild(chapterOption);
+
+            // Stats for Nerds shortcut reference
+            const statsOption = document.createElement('div');
+            statsOption.className = 'enhanced-option';
+            const statsHeading = document.createElement('div');
+            statsHeading.className = 'enhanced-option-heading';
+            const statsLabel = document.createElement('div');
+            statsLabel.className = 'enhanced-option-label';
+            statsLabel.textContent = 'Stats for Nerds & Quick Shader Menu';
+            const statsDesc = document.createElement('div');
+            statsDesc.className = 'enhanced-option-description';
+            statsDesc.textContent = 'During playback, press I to toggle live codec/HDR/hwdec/cache telemetry, or press Ctrl+Shift+U to switch GLSL shaders live.';
+            statsHeading.appendChild(statsLabel);
+            statsHeading.appendChild(statsDesc);
+            statsOption.appendChild(statsHeading);
+            playerCategory.appendChild(statsOption);
+
+            // Upscaling & GLSL Shaders subsection
+            playerCategory.appendChild(createPlayerSubsection('Upscaling & GLSL Shaders'));
+            const openShadersBtn = createOptionButton('openshadersfolderBtn', 'Open Shaders Folder');
+            openShadersBtn.onclick = () => {
+                postEnhancedMessage('openShadersFolder');
+            };
+            playerCategory.appendChild(createOptionRow([openShadersBtn]));
+
+            const shadersGrid = document.createElement('div');
+            shadersGrid.id = 'enhanced-shaders-grid';
+            playerCategory.appendChild(shadersGrid);
+
             page.appendChild(playerCategory);
+
+            // General Category (Discord Rich Presence + Backup & Restore)
+            const generalCategory = createCategory('enhanced-general-category', 'general', 'General', sampleGroup);
+
+            const discordOption = document.createElement('div');
+            discordOption.className = 'enhanced-option';
+
+            const discordHeading = document.createElement('div');
+            discordHeading.className = 'enhanced-option-heading';
+            const discordLabel = document.createElement('div');
+            discordLabel.className = 'enhanced-option-label';
+            discordLabel.textContent = 'Discord Rich Presence';
+            const discordDesc = document.createElement('div');
+            discordDesc.style.cssText = 'font-size: 0.85rem; color: rgba(255, 255, 255, 0.55); margin-top: 0.25rem;';
+            discordDesc.textContent = 'Show what you are watching on your Discord profile.';
+            discordHeading.appendChild(discordLabel);
+            discordHeading.appendChild(discordDesc);
+
+            const discordContent = document.createElement('div');
+            discordContent.className = 'enhanced-option-content';
+
+            const discordToggle = document.createElement('div');
+            discordToggle.id = 'discordrpcToggle';
+            discordToggle.setAttribute('tabindex', '0');
+            discordToggle.setAttribute('role', 'switch');
+            discordToggle.setAttribute('title', 'Discord Rich Presence');
+            discordToggle.className = `toggle-container-lZfHP button-container-zVLH6${isDiscordRpcEnabled() ? ' checked' : ''}`;
+            discordToggle.setAttribute('aria-checked', isDiscordRpcEnabled() ? 'true' : 'false');
+            discordToggle.style.cssText = 'outline: none; cursor: pointer;';
+
+            const discordKnob = document.createElement('div');
+            discordKnob.className = 'toggle-toOWM';
+            discordToggle.appendChild(discordKnob);
+
+            const onToggleDiscordRpc = () => {
+                setDiscordRpc(!isDiscordRpcEnabled());
+            };
+            discordToggle.addEventListener('click', onToggleDiscordRpc);
+            discordToggle.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onToggleDiscordRpc();
+                }
+            });
+
+            discordContent.appendChild(discordToggle);
+            discordOption.appendChild(discordHeading);
+            discordOption.appendChild(discordContent);
+            generalCategory.appendChild(discordOption);
+
+            // Backup & Restore row (settings.json + plugin_setting:*)
+            const backupOption = document.createElement('div');
+            backupOption.className = 'enhanced-option';
+
+            const backupHeading = document.createElement('div');
+            backupHeading.className = 'enhanced-option-heading';
+            const backupLabel = document.createElement('div');
+            backupLabel.className = 'enhanced-option-label';
+            backupLabel.textContent = 'Backup & Restore';
+            const backupDesc = document.createElement('div');
+            backupDesc.style.cssText = 'font-size: 0.85rem; color: rgba(255, 255, 255, 0.55); margin-top: 0.25rem;';
+            backupDesc.textContent = 'Export or import settings.json along with saved plugin settings.';
+            backupHeading.appendChild(backupLabel);
+            backupHeading.appendChild(backupDesc);
+
+            const backupContent = document.createElement('div');
+            backupContent.className = 'enhanced-option-content';
+
+            const exportBtn = createOptionButton('exportsettingsBtn', 'Export Setup');
+            exportBtn.onclick = () => {
+                exportEnhancedSetup();
+            };
+            const importBtn = createOptionButton('importsettingsBtn', 'Import Setup');
+            importBtn.onclick = () => {
+                importEnhancedSetup();
+            };
+
+            backupContent.appendChild(exportBtn);
+            backupContent.appendChild(importBtn);
+            backupOption.appendChild(backupHeading);
+            backupOption.appendChild(backupContent);
+            generalCategory.appendChild(backupOption);
+
+            page.appendChild(generalCategory);
 
             // Streaming Server Category
             const serverCategory = createCategory('enhanced-server-category', 'server', 'Streaming Server', sampleGroup);
@@ -383,6 +670,7 @@ function buildSettingsPage(): Promise<void> {
             // Client Updates Category
             const updatesCategory = createCategory('enhanced-updates-category', 'updates', 'Client Updates', sampleGroup);
             const checkClientUpdatesBtn = createOptionButton('checkclientupdatesBtn', 'Check for Client Updates');
+            const viewPatchNotesBtn = createOptionButton('viewpatchnotesBtn', 'View Patch Notes');
             const openClientReleasesBtn = createOptionButton('openclientreleasesBtn', 'View Releases');
             openClientReleasesBtn.setAttribute('title', 'View Releases on GitHub');
 
@@ -390,11 +678,17 @@ function buildSettingsPage(): Promise<void> {
             clientVersionInfo.id = 'enhanced-client-version-info';
             clientVersionInfo.style.cssText = 'font-size: 0.9rem; color: #a0a0a0; margin-top: 0.5rem; margin-left: 0.2rem;';
 
+            const patchNotesContainer = document.createElement('div');
+            patchNotesContainer.id = 'enhanced-client-patch-notes';
+            patchNotesContainer.className = 'enhanced-patch-notes';
+            patchNotesContainer.style.display = 'none';
+
             const renderClientVersionInfo = () => {
                 const currentVer = getCurrentClientVersion();
                 const latest = getLatestClientVersion();
                 if (!latest) {
                     clientVersionInfo.innerHTML = `<span style="color: #ddd; font-weight: 600;">Installed Version:</span> v${escapeHtml(currentVer)}`;
+                    patchNotesContainer.style.display = 'none';
                     return;
                 }
                 const hasUpdate = isNewerVersion(latest.version, currentVer);
@@ -402,11 +696,26 @@ function buildSettingsPage(): Promise<void> {
                     ? `<span style="color: #fcc419; font-weight: 600;">● Update available: v${escapeHtml(latest.version)}</span>`
                     : `<span style="color: #51cf66;">● Up to date (v${escapeHtml(latest.version)})</span>`;
                 clientVersionInfo.innerHTML = `<span style="color: #ddd; font-weight: 600;">Installed Version:</span> v${escapeHtml(currentVer)} &bull; ${badge}`;
+
+                if (latest.body && latest.body.trim()) {
+                    const releaseTitle = latest.releaseName || `Release v${latest.version}`;
+                    patchNotesContainer.innerHTML = `
+                        <div style="font-weight:700;font-size:0.94rem;color:#fff;margin-bottom:8px;">Latest Release Notes — ${escapeHtml(releaseTitle)}</div>
+                        ${renderPatchNotesMarkdown(latest.body)}
+                    `;
+                    patchNotesContainer.style.display = 'block';
+                } else {
+                    patchNotesContainer.style.display = 'none';
+                }
             };
 
             checkClientUpdatesBtn.onclick = async () => {
                 await checkClientUpdate(true);
                 renderClientVersionInfo();
+            };
+
+            viewPatchNotesBtn.onclick = async () => {
+                await showPatchNotesModal(getLatestClientVersion());
             };
 
             openClientReleasesBtn.onclick = () => {
@@ -416,8 +725,9 @@ function buildSettingsPage(): Promise<void> {
                 } catch (_) {}
             };
 
-            updatesCategory.appendChild(createOptionRow([checkClientUpdatesBtn, openClientReleasesBtn]));
+            updatesCategory.appendChild(createOptionRow([checkClientUpdatesBtn, viewPatchNotesBtn, openClientReleasesBtn]));
             updatesCategory.appendChild(clientVersionInfo);
+            updatesCategory.appendChild(patchNotesContainer);
             page.appendChild(updatesCategory);
 
             container.appendChild(page);
@@ -438,6 +748,11 @@ function buildSettingsPage(): Promise<void> {
                 (window as any).StremioEnhancedAPI.togglePlugin(fileName, enabled);
             });
             syncThumbnailPreviewToggle();
+            syncThumbnailPrecacheToggle();
+            syncThumbnailPreviewSizeSelect();
+            syncChapterMarkersToggle();
+            syncShaderSettingsUI();
+            syncDiscordRpcToggle();
 
             updateRoute();
         })

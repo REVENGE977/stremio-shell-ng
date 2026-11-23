@@ -4,12 +4,14 @@ use crate::stremio_app::RPCResponse;
 use flume::{Receiver, Sender};
 use libmpv2::{events::Event, Format, Mpv, SetData};
 use native_windows_gui::{self as nwg, PartialUi};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
     convert::TryFrom,
     ffi::CString,
     mem,
     os::raw::c_char,
+    path::{Path, PathBuf},
     ptr,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -20,7 +22,7 @@ use std::{
 };
 use winapi::shared::{
     minwindef::{DWORD, UINT},
-    windef::{HMONITOR, HWND},
+    windef::{HMONITOR, HWND, RECT},
     winerror::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS},
 };
 use winapi::um::{
@@ -31,7 +33,8 @@ use winapi::um::{
     },
     winnt::LONG,
     winuser::{
-        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
+        GetClientRect, GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITORINFOEXW,
+        MONITOR_DEFAULTTONEAREST,
     },
 };
 
@@ -351,9 +354,228 @@ struct DisplayOutputState {
     scale_percent: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterInfo {
+    pub title: String,
+    pub time: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybackStats {
+    pub media_title: Option<String>,
+    pub path: Option<String>,
+    pub video_codec: Option<String>,
+    pub video_format: Option<String>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub dwidth: Option<i64>,
+    pub dheight: Option<i64>,
+    pub output_width: Option<i64>,
+    pub output_height: Option<i64>,
+    pub container_fps: Option<f64>,
+    pub estimated_vf_fps: Option<f64>,
+    pub display_fps: Option<f64>,
+    pub hwdec_current: Option<String>,
+    pub video_bitrate: Option<f64>,
+    pub color_primaries: Option<String>,
+    pub color_gamma: Option<String>,
+    pub color_matrix: Option<String>,
+    pub sig_peak: Option<f64>,
+    pub pixel_format: Option<String>,
+    pub audio_codec: Option<String>,
+    pub audio_channels: Option<String>,
+    pub audio_sample_rate: Option<i64>,
+    pub audio_bitrate: Option<f64>,
+    pub dropped_frames: Option<i64>,
+    pub decoder_dropped_frames: Option<i64>,
+    pub mistimed_frames: Option<i64>,
+    pub avsync: Option<f64>,
+    pub cache_duration: Option<f64>,
+    pub cache_speed: Option<f64>,
+    pub paused_for_cache: bool,
+    pub speed: Option<f64>,
+    pub volume: Option<f64>,
+    pub time_pos: Option<f64>,
+    pub duration: Option<f64>,
+    pub active_shaders: Vec<String>,
+}
+
+#[cfg(windows)]
+const SHADER_LIST_SEP: &str = ";";
+#[cfg(not(windows))]
+const SHADER_LIST_SEP: &str = ":";
+
+pub fn set_glsl_shaders(mpv: &Mpv, paths: &[PathBuf]) {
+    if paths.is_empty() {
+        if let Err(e) = mpv.command("change-list", &["glsl-shaders", "clr", ""]) {
+            if let Err(e2) = mpv.set_property("glsl-shaders", String::new()) {
+                eprintln!("[Shaders] Failed to clear glsl-shaders: {e}; fallback error: {e2}");
+            }
+        }
+        return;
+    }
+
+    let joined = paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(SHADER_LIST_SEP);
+
+    if let Err(e) = mpv.command("change-list", &["glsl-shaders", "set", &joined]) {
+        if let Err(e2) = mpv.set_property("glsl-shaders", joined) {
+            eprintln!("[Shaders] Failed to set glsl-shaders: {e}; fallback error: {e2}");
+        }
+    }
+}
+
+pub fn get_chapters(mpv: &Mpv) -> Vec<ChapterInfo> {
+    let Ok(raw) = mpv.get_property::<String>("chapter-list") else {
+        return Vec::new();
+    };
+    let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(&raw)
+    else {
+        return Vec::new();
+    };
+
+    let mut chapters = items
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, item)| {
+            let time = item.get("time")?.as_f64()?;
+            if !time.is_finite() || time < 0.0 {
+                return None;
+            }
+            let title = item
+                .get("title")
+                .and_then(|t| t.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("Chapter {}", idx + 1));
+            Some(ChapterInfo { title, time })
+        })
+        .collect::<Vec<_>>();
+
+    chapters.sort_by(|a, b| a.time.total_cmp(&b.time));
+    chapters
+}
+
+pub fn get_playback_stats(mpv: &Mpv, window_handle: isize) -> PlaybackStats {
+    let get_str = |prop: &str| {
+        mpv.get_property::<String>(prop)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let get_i64 = |prop: &str| mpv.get_property::<i64>(prop).ok();
+    let get_f64 = |prop: &str| mpv.get_property::<f64>(prop).ok().filter(|v| v.is_finite());
+    let get_bool = |prop: &str| mpv.get_property::<bool>(prop).unwrap_or(false);
+
+    let active_shaders = match mpv.get_property::<String>("glsl-shaders") {
+        Ok(raw) => parse_shader_list(&raw),
+        Err(_) => Vec::new(),
+    };
+
+    let mut client_rect: RECT = unsafe { mem::zeroed() };
+    let (win_w, win_h) = if window_handle != 0
+        && unsafe { GetClientRect(window_handle as HWND, &mut client_rect) } != 0
+    {
+        (
+            i64::from(client_rect.right - client_rect.left),
+            i64::from(client_rect.bottom - client_rect.top),
+        )
+    } else {
+        (0, 0)
+    };
+
+    let output_width = get_i64("osd-width")
+        .filter(|&v| v > 0)
+        .or_else(|| (win_w > 0).then_some(win_w));
+    let output_height = get_i64("osd-height")
+        .filter(|&v| v > 0)
+        .or_else(|| (win_h > 0).then_some(win_h));
+
+    PlaybackStats {
+        media_title: get_str("media-title"),
+        path: get_str("path"),
+        video_codec: get_str("video-codec"),
+        video_format: get_str("video-format"),
+        width: get_i64("width"),
+        height: get_i64("height"),
+        dwidth: get_i64("dwidth"),
+        dheight: get_i64("dheight"),
+        output_width,
+        output_height,
+        container_fps: get_f64("container-fps"),
+        estimated_vf_fps: get_f64("estimated-vf-fps"),
+        display_fps: get_f64("display-fps"),
+        hwdec_current: get_str("hwdec-current"),
+        video_bitrate: get_f64("video-bitrate"),
+        color_primaries: get_str("video-params/primaries"),
+        color_gamma: get_str("video-params/gamma"),
+        color_matrix: get_str("video-params/colormatrix"),
+        sig_peak: get_f64("video-params/sig-peak"),
+        pixel_format: get_str("video-params/pixelformat"),
+        audio_codec: get_str("audio-codec-name"),
+        audio_channels: get_str("audio-params/hr-channels")
+            .or_else(|| get_str("audio-params/channels")),
+        audio_sample_rate: get_i64("audio-params/samplerate"),
+        audio_bitrate: get_f64("audio-bitrate"),
+        dropped_frames: get_i64("frame-drop-count"),
+        decoder_dropped_frames: get_i64("decoder-frame-drop-count"),
+        mistimed_frames: get_i64("mistimed-frame-count"),
+        avsync: get_f64("avsync"),
+        cache_duration: get_f64("demuxer-cache-duration"),
+        cache_speed: get_f64("cache-speed"),
+        paused_for_cache: get_bool("paused-for-cache"),
+        speed: get_f64("speed"),
+        volume: get_f64("volume"),
+        time_pos: get_f64("time-pos"),
+        duration: get_f64("duration"),
+        active_shaders,
+    }
+}
+
+fn parse_shader_list(raw: &str) -> Vec<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let raw_paths: Vec<String> = if let Ok(serde_json::Value::Array(arr)) =
+        serde_json::from_str::<serde_json::Value>(trimmed)
+    {
+        arr.into_iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect()
+    } else {
+        trimmed
+            .split(SHADER_LIST_SEP)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+
+    raw_paths
+        .into_iter()
+        .filter_map(|p| {
+            Path::new(&p)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_string)
+                .or(Some(p))
+        })
+        .collect()
+}
+
 #[derive(Default)]
 pub struct Player {
     pub channel: ipc::Channel,
+    pub mpv: Option<Arc<Mpv>>,
+    pub window_handle: isize,
 }
 
 impl PartialUi for Player {
@@ -377,6 +599,8 @@ impl PartialUi for Player {
         let video_ready_state = Arc::new(Mutex::new(VideoReadyState::default()));
 
         let mpv = Arc::new(create_mpv(window_handle));
+        data.mpv = Some(Arc::clone(&mpv));
+        data.window_handle = window_handle as isize;
         let mpv_event_client = mpv
             .create_client(None)
             .expect("cannot create MPV event client");

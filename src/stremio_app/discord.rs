@@ -19,6 +19,7 @@ enum DiscordCommand {
     ClearActivity,
 }
 
+#[derive(Clone)]
 pub struct DiscordRpc {
     commands: Sender<DiscordCommand>,
 }

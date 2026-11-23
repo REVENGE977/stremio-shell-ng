@@ -1,33 +1,42 @@
 import { PermanentCore } from '../core/permanentCore';
 import { postEnhancedMessage } from '../utils/dom';
 import { EnhancedData } from '../types';
+import { getChapterAtTime, getChapters, isChapterMarkersEnabled } from './chapterMarkers';
 
 interface ThumbnailPayload {
     time: number;
     dataUrl: string;
     width: number;
     height: number;
+    precache?: boolean;
 }
 
 interface CachedThumbnail {
+    time: number;
     dataUrl: string;
     width: number;
     height: number;
 }
 
-const MAX_JS_CACHE_ENTRIES = 150;
+const MAX_JS_CACHE_ENTRIES = 260;
 const REQUEST_THROTTLE_MS = 80;
 const NORMAL_PREVIEW_WIDTH = 240;
 const PIP_PREVIEW_WIDTH = 160;
+const MIN_PREVIEW_WIDTH = 160;
+const MAX_PREVIEW_WIDTH = 360;
 
 let previewEnabled = true;
+let precacheEnabled = true;
+let configuredPreviewWidth = NORMAL_PREVIEW_WIDTH;
 let initialized = false;
+let inPlayerRoute = false;
 let currentStreamKey = '';
 const thumbCache = new Map<string, CachedThumbnail>();
 
 let previewEl: HTMLDivElement | null = null;
 let frameWrapEl: HTMLDivElement | null = null;
 let imgEl: HTMLImageElement | null = null;
+let chapterEl: HTMLDivElement | null = null;
 let timeEl: HTMLDivElement | null = null;
 
 let isVisible = false;
@@ -43,6 +52,14 @@ export function isThumbnailPreviewEnabled(): boolean {
     return previewEnabled;
 }
 
+export function isThumbnailPrecacheEnabled(): boolean {
+    return precacheEnabled;
+}
+
+export function getThumbnailPreviewSize(): number {
+    return configuredPreviewWidth;
+}
+
 export function updateThumbnailPreviewData(data: EnhancedData): void {
     if (typeof data.thumbnailPreview === 'boolean') {
         previewEnabled = data.thumbnailPreview;
@@ -52,6 +69,19 @@ export function updateThumbnailPreviewData(data: EnhancedData): void {
         }
         syncThumbnailPreviewToggle();
     }
+    if (typeof data.thumbnailPrecache === 'boolean') {
+        precacheEnabled = data.thumbnailPrecache;
+        syncThumbnailPrecacheToggle();
+    }
+    if (typeof data.thumbnailPreviewSize === 'number' && Number.isFinite(data.thumbnailPreviewSize)) {
+        const clamped = Math.min(MAX_PREVIEW_WIDTH, Math.max(MIN_PREVIEW_WIDTH, Math.round(data.thumbnailPreviewSize)));
+        if (clamped !== configuredPreviewWidth) {
+            configuredPreviewWidth = clamped;
+            thumbCache.clear();
+            lastDisplayFrameSize = null;
+        }
+        syncThumbnailPreviewSizeSelect();
+    }
 }
 
 export function syncThumbnailPreviewToggle(): void {
@@ -59,6 +89,19 @@ export function syncThumbnailPreviewToggle(): void {
     if (!toggle) return;
     toggle.classList.toggle('checked', previewEnabled);
     toggle.setAttribute('aria-checked', previewEnabled ? 'true' : 'false');
+}
+
+export function syncThumbnailPrecacheToggle(): void {
+    const toggle = document.getElementById('thumbnailprecacheToggle');
+    if (!toggle) return;
+    toggle.classList.toggle('checked', precacheEnabled);
+    toggle.setAttribute('aria-checked', precacheEnabled ? 'true' : 'false');
+}
+
+export function syncThumbnailPreviewSizeSelect(): void {
+    const select = document.getElementById('thumbnailpreviewSizeSelect') as HTMLSelectElement | null;
+    if (!select) return;
+    select.value = String(configuredPreviewWidth);
 }
 
 function getDurationSeconds(): number {
@@ -91,13 +134,45 @@ function ensureStreamCacheScope(): string {
     return currentStreamKey;
 }
 
+function quantizeStepSeconds(duration: number): number {
+    if (!(duration > 0)) return 2;
+    if (duration <= 120) return 0.5;
+    if (duration <= 600) return 2;
+    if (duration <= 2400) return 4;
+    if (duration <= 5400) return 6;
+    return 8;
+}
+
 function quantizeTime(timeSec: number, duration: number): number {
-    const step = duration > 0 && duration <= 120 ? 0.5 : 1;
+    const step = quantizeStepSeconds(duration);
     return Math.round(timeSec / step) * step;
 }
 
 function makeCacheKey(streamKey: string, qTime: number, maxWidth: number): string {
     return `${streamKey}|${qTime.toFixed(1)}|${maxWidth}`;
+}
+
+function findNearestCachedThumbnail(
+    streamKey: string,
+    targetTime: number,
+    previewW: number,
+    maxDeltaSeconds: number
+): CachedThumbnail | null {
+    const prefix = `${streamKey}|`;
+    const suffix = `|${previewW}`;
+    let best: CachedThumbnail | null = null;
+    let bestDelta = maxDeltaSeconds;
+
+    thumbCache.forEach((entry, key) => {
+        if (!key.startsWith(prefix) || !key.endsWith(suffix)) return;
+        const delta = Math.abs(entry.time - targetTime);
+        if (delta <= bestDelta) {
+            bestDelta = delta;
+            best = entry;
+        }
+    });
+
+    return best;
 }
 
 function formatTimestamp(seconds: number): string {
@@ -157,6 +232,24 @@ function ensurePreviewElement(): void {
             transition: 'opacity 0.1s ease'
         });
 
+        chapterEl = document.createElement('div');
+        Object.assign(chapterEl.style, {
+            width: '100%',
+            maxWidth: `${NORMAL_PREVIEW_WIDTH}px`,
+            textAlign: 'center',
+            padding: '5px 10px 0px',
+            fontSize: '0.78rem',
+            fontWeight: '600',
+            color: 'rgba(205, 196, 255, 0.96)',
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            boxSizing: 'border-box',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            display: 'none',
+            lineHeight: '1.25'
+        });
+
         timeEl = document.createElement('div');
         Object.assign(timeEl.style, {
             width: '100%',
@@ -175,6 +268,7 @@ function ensurePreviewElement(): void {
 
         frameWrapEl.appendChild(imgEl);
         previewEl.appendChild(frameWrapEl);
+        previewEl.appendChild(chapterEl);
         previewEl.appendChild(timeEl);
     }
 
@@ -183,6 +277,12 @@ function ensurePreviewElement(): void {
     if (targetParent && previewEl.parentElement !== targetParent) {
         targetParent.appendChild(previewEl);
     }
+}
+
+function clearDisplayedThumbnail(): void {
+    if (!imgEl) return;
+    imgEl.style.opacity = '0';
+    imgEl.removeAttribute('src');
 }
 
 function applyThumbToDom(thumb: CachedThumbnail): void {
@@ -204,6 +304,7 @@ function hidePreview(): void {
         clearTimeout(trailingTimer);
         trailingTimer = null;
     }
+    clearDisplayedThumbnail();
     if (previewEl) {
         previewEl.style.display = 'none';
     }
@@ -249,8 +350,12 @@ function isLiveSeekBar(slider: HTMLElement): boolean {
     return seekContainer.querySelector('[class*="live-badge-layer-"]') !== null;
 }
 
+function canShowTooltip(): boolean {
+    return previewEnabled || (isChapterMarkersEnabled() && getChapters().length > 0);
+}
+
 function updatePreviewAtPointer(slider: HTMLElement, clientX: number): void {
-    if (!previewEnabled || isLiveSeekBar(slider)) {
+    if (!canShowTooltip() || isLiveSeekBar(slider)) {
         hidePreview();
         return;
     }
@@ -271,35 +376,64 @@ function updatePreviewAtPointer(slider: HTMLElement, clientX: number): void {
     const targetTime = ratio * duration;
 
     const isPip = document.documentElement.classList.contains('stremio-pip-mode');
-    const previewW = isPip ? PIP_PREVIEW_WIDTH : NORMAL_PREVIEW_WIDTH;
+    const previewW = isPip ? Math.min(PIP_PREVIEW_WIDTH, configuredPreviewWidth) : configuredPreviewWidth;
     lastPreviewWidth = previewW;
     lastHoveredTime = targetTime;
 
     ensurePreviewElement();
     if (!previewEl || !frameWrapEl || !imgEl || !timeEl) return;
 
-    const streamKey = ensureStreamCacheScope();
-    const qTime = quantizeTime(targetTime, duration);
-    const cacheKey = makeCacheKey(streamKey, qTime, previewW);
-    const cached = thumbCache.get(cacheKey);
+    if (previewEnabled) {
+        frameWrapEl.style.display = 'flex';
+        const streamKey = ensureStreamCacheScope();
+        const step = quantizeStepSeconds(duration);
+        const qTime = quantizeTime(targetTime, duration);
+        const cacheKey = makeCacheKey(streamKey, qTime, previewW);
+        const cached = thumbCache.get(cacheKey);
 
-    if (cached) {
-        applyThumbToDom(cached);
-    } else {
-        const defaultH = lastDisplayFrameSize
-            ? Math.round((previewW * lastDisplayFrameSize.height) / lastDisplayFrameSize.width)
-            : Math.round((previewW * 9) / 16);
-        frameWrapEl.style.width = `${previewW}px`;
-        frameWrapEl.style.height = `${defaultH}px`;
-        if (!imgEl.getAttribute('src')) {
-            imgEl.style.opacity = '0';
+        if (cached) {
+            applyThumbToDom(cached);
+        } else {
+            const nearestTol = Math.min(20, Math.max(step * 1.5, duration / 100));
+            const nearest = findNearestCachedThumbnail(streamKey, targetTime, previewW, nearestTol);
+            if (nearest) {
+                applyThumbToDom(nearest);
+                if (Math.abs(nearest.time - targetTime) > step) {
+                    dispatchThumbnailRequest(targetTime, previewW);
+                }
+            } else {
+                const defaultH = lastDisplayFrameSize
+                    ? Math.round((previewW * lastDisplayFrameSize.height) / lastDisplayFrameSize.width)
+                    : Math.round((previewW * 9) / 16);
+                frameWrapEl.style.width = `${previewW}px`;
+                frameWrapEl.style.height = `${defaultH}px`;
+                clearDisplayedThumbnail();
+                dispatchThumbnailRequest(targetTime, previewW);
+            }
         }
-        dispatchThumbnailRequest(targetTime, previewW);
+    } else {
+        frameWrapEl.style.display = 'none';
+    }
+
+    const chapter = isChapterMarkersEnabled() ? getChapterAtTime(targetTime) : null;
+    if (chapterEl) {
+        if (chapter && chapter.title) {
+            chapterEl.textContent = chapter.title;
+            chapterEl.style.maxWidth = `${previewEnabled ? previewW : 240}px`;
+            chapterEl.style.display = 'block';
+            timeEl.style.borderTop = 'none';
+        } else {
+            chapterEl.style.display = 'none';
+            timeEl.style.borderTop = '1px solid rgba(255, 255, 255, 0.08)';
+        }
     }
 
     timeEl.textContent = formatTimestamp(targetTime);
+    previewEl.style.display = 'flex';
 
-    const cardWidth = Number.parseFloat(frameWrapEl.style.width) || previewW;
+    const cardWidth = previewEnabled
+        ? Number.parseFloat(frameWrapEl.style.width) || previewW
+        : Math.max(110, previewEl.offsetWidth || 160);
     const clampedLeft = Math.min(
         window.innerWidth - cardWidth - 12,
         Math.max(12, clientX - cardWidth / 2)
@@ -308,13 +442,22 @@ function updatePreviewAtPointer(slider: HTMLElement, clientX: number): void {
 
     previewEl.style.left = `${Math.round(clampedLeft)}px`;
     previewEl.style.bottom = `${Math.round(bottomOffset)}px`;
-    previewEl.style.display = 'flex';
     isVisible = true;
+}
+
+function updateInPlayerRoute(): boolean {
+    const hash = window.location.hash || '';
+    inPlayerRoute =
+        hash.startsWith('#/player') ||
+        hash.includes('/player/') ||
+        Boolean(document.documentElement?.classList.contains('stremio-player-active'));
+    return inPlayerRoute;
 }
 
 export function setupThumbnailPreview(): void {
     if (initialized) return;
     initialized = true;
+    updateInPlayerRoute();
 
     (window as any).__receiveThumbnailPreview = function (payload: ThumbnailPayload) {
         if (!payload || !payload.dataUrl || !Number.isFinite(payload.time)) return;
@@ -330,6 +473,7 @@ export function setupThumbnailPreview(): void {
             if (oldest !== undefined) thumbCache.delete(oldest);
         }
         const entry: CachedThumbnail = {
+            time: payload.time,
             dataUrl: payload.dataUrl,
             width: payload.width || NORMAL_PREVIEW_WIDTH,
             height: payload.height || Math.round((NORMAL_PREVIEW_WIDTH * 9) / 16)
@@ -337,16 +481,18 @@ export function setupThumbnailPreview(): void {
         thumbCache.set(cacheKey, entry);
 
         if (isVisible && previewEnabled && lastHoveredTime >= 0) {
+            const step = quantizeStepSeconds(duration);
             const delta = Math.abs(payload.time - lastHoveredTime);
-            const maxTolerance = Math.max(2.5, duration * 0.015);
-            if (delta <= maxTolerance || !imgEl?.getAttribute('src')) {
+            const maxTolerance = Math.max(step * 1.25, Math.min(15.0, duration * 0.005));
+            const hoveredQTime = quantizeTime(lastHoveredTime, duration);
+            if (qTime === hoveredQTime || delta <= maxTolerance) {
                 applyThumbToDom(entry);
             }
         }
     };
 
     document.addEventListener('pointerdown', (e: PointerEvent) => {
-        if (e.button !== 0) return;
+        if (e.button !== 0 || (!inPlayerRoute && !updateInPlayerRoute())) return;
         const slider = findSeekSlider(e.target);
         if (slider) {
             draggingSlider = slider;
@@ -355,7 +501,7 @@ export function setupThumbnailPreview(): void {
     }, true);
 
     document.addEventListener('pointermove', (e: PointerEvent) => {
-        if (!previewEnabled) {
+        if (!inPlayerRoute || !canShowTooltip()) {
             if (isVisible) hidePreview();
             return;
         }
@@ -399,10 +545,7 @@ export function setupThumbnailPreview(): void {
     });
 
     const onRouteChange = () => {
-        const inPlayer =
-            window.location.hash.startsWith('#/player') ||
-            document.querySelector('[class*="player-container"]') !== null;
-        if (!inPlayer) {
+        if (!updateInPlayerRoute()) {
             draggingSlider = null;
             hidePreview();
         }

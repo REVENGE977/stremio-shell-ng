@@ -1,6 +1,7 @@
 use crate::stremio_app::stremio_wevbiew::WebViewCommand;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use flume::{Receiver, Sender};
+use jpeg_encoder::{ColorType, Encoder};
 use libmpv2::Mpv;
 use std::{
     collections::{HashMap, VecDeque},
@@ -14,13 +15,22 @@ use std::{
 
 pub const DEFAULT_THUMB_MAX_WIDTH: u32 = 240;
 const MIN_THUMB_MAX_WIDTH: u32 = 120;
-const MAX_THUMB_MAX_WIDTH: u32 = 360;
-const MAX_CACHE_ENTRIES: usize = 120;
+const MAX_THUMB_MAX_WIDTH: u32 = 400;
+const JPEG_QUALITY: u8 = 80;
+const MAX_CACHE_ENTRIES: usize = 240;
 const SEEK_TIMEOUT: Duration = Duration::from_secs(4);
 const STREAM_LOAD_TIMEOUT: Duration = Duration::from_secs(12);
+const PREEMPT_MIN_ELAPSED: Duration = Duration::from_millis(120);
+const PRECACHE_START_DELAY: Duration = Duration::from_secs(2);
+const PRECACHE_HOVER_COOLDOWN: Duration = Duration::from_millis(1500);
+const PRECACHE_STEP_COOLDOWN: Duration = Duration::from_millis(60);
+const PRECACHE_MAX_SLOTS: usize = 60;
+const PRECACHE_MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
 pub enum ThumbnailCmd {
     SetEnabled(bool),
+    SetPrecache(bool),
+    SetPreviewSize(u32),
     SetSource(Option<String>),
     Request { time_sec: f64, max_width: u32 },
 }
@@ -40,11 +50,13 @@ struct CachedThumb {
 
 struct InFlightSeek {
     requested_time: f64,
+    clamped_time: f64,
     quantized_key: i64,
     max_width: u32,
     started_at: Instant,
     seek_settled: bool,
     render_ready: bool,
+    is_precache: bool,
 }
 
 struct SwRenderContext {
@@ -191,19 +203,22 @@ impl ThumbnailEngine {
                 ("msg-level", "all=no"),
                 ("pause", "yes"),
                 ("keep-open", "yes"),
-                ("hwdec", "no"),
+                ("hwdec", "auto-copy"),
                 ("hr-seek", "no"),
                 ("hr-seek-framedrop", "yes"),
                 ("vd-lavc-fast", "yes"),
                 ("vd-lavc-skiploopfilter", "all"),
-                ("vd-lavc-threads", "2"),
+                ("vd-lavc-skipframe", "nonkey"),
+                ("vd-lavc-threads", "4"),
                 ("audio-display", "no"),
                 ("video-timing-offset", "0"),
                 ("sws-scaler", "fast-bilinear"),
-                ("demuxer-readahead-secs", "2"),
+                ("demuxer-readahead-secs", "0"),
                 ("cache", "yes"),
-                ("demuxer-max-bytes", "16MiB"),
-                ("demuxer-max-back-bytes", "8MiB"),
+                ("demuxer-max-bytes", "2MiB"),
+                ("demuxer-max-back-bytes", "0"),
+                ("stream-buffer-size", "64KiB"),
+                ("demuxer-lavf-o", "fflags=+fastseek"),
                 (
                     "stream-lavf-o",
                     "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5",
@@ -259,59 +274,117 @@ pub fn compute_thumbnail_dimensions(
     (width.max(64), height.max(36))
 }
 
-pub fn encode_bgr0_to_bmp(bgr0: &[u8], stride: usize, width: usize, height: usize) -> Vec<u8> {
-    let row_bytes = width * 3;
-    let bmp_stride = (row_bytes + 3) & !3;
-    let pixel_data_size = bmp_stride * height;
-    let file_size = 54 + pixel_data_size;
+pub fn encode_bgr0_to_jpeg(
+    bgr0: &[u8],
+    stride: usize,
+    width: usize,
+    height: usize,
+    quality: u8,
+) -> Result<Vec<u8>, String> {
+    if width == 0 || height == 0 || width > u16::MAX as usize || height > u16::MAX as usize {
+        return Err(format!("invalid thumbnail dimensions: {width}x{height}"));
+    }
+    if stride < width * 4 {
+        return Err(format!("stride {stride} smaller than row width {}", width * 4));
+    }
+    let required = stride
+        .checked_mul(height)
+        .ok_or_else(|| "buffer size overflow".to_string())?;
+    if bgr0.len() < required {
+        return Err(format!(
+            "bgr0 buffer too short: {} < {required}",
+            bgr0.len()
+        ));
+    }
 
-    let mut out = Vec::with_capacity(file_size);
-    // BITMAPFILEHEADER (14 bytes)
-    out.extend_from_slice(b"BM");
-    out.extend_from_slice(&(file_size as u32).to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes());
-    out.extend_from_slice(&54u32.to_le_bytes());
-
-    // BITMAPINFOHEADER (40 bytes)
-    out.extend_from_slice(&40u32.to_le_bytes());
-    out.extend_from_slice(&(width as i32).to_le_bytes());
-    out.extend_from_slice(&(height as i32).to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&24u16.to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    out.extend_from_slice(&(pixel_data_size as u32).to_le_bytes());
-    out.extend_from_slice(&0i32.to_le_bytes());
-    out.extend_from_slice(&0i32.to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-
-    let pad_bytes = bmp_stride - row_bytes;
-    let padding = [0u8; 3];
-
-    // Standard bottom-up BMP: write rows from bottom to top.
-    for y in (0..height).rev() {
+    let mut rgb = Vec::with_capacity(width * height * 3);
+    for y in 0..height {
         let row_start = y * stride;
         for x in 0..width {
             let px = row_start + x * 4;
-            out.push(bgr0[px]);
-            out.push(bgr0[px + 1]);
-            out.push(bgr0[px + 2]);
-        }
-        if pad_bytes > 0 {
-            out.extend_from_slice(&padding[..pad_bytes]);
+            rgb.push(bgr0[px + 2]); // R
+            rgb.push(bgr0[px + 1]); // G
+            rgb.push(bgr0[px]);     // B
         }
     }
 
-    out
+    let mut out = Vec::new();
+    Encoder::new(&mut out, quality)
+        .encode(&rgb, width as u16, height as u16, ColorType::Rgb)
+        .map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+pub fn quantize_step_secs(duration: Option<f64>) -> f64 {
+    match duration {
+        Some(d) if d > 0.0 && d <= 120.0 => 0.5,
+        Some(d) if d > 0.0 && d <= 600.0 => 2.0,
+        Some(d) if d > 0.0 && d <= 2400.0 => 4.0,
+        Some(d) if d > 0.0 && d <= 5400.0 => 6.0,
+        Some(d) if d > 5400.0 => 8.0,
+        _ => 2.0,
+    }
 }
 
 fn quantize_time(time_sec: f64, duration: Option<f64>) -> i64 {
-    let step = match duration {
-        Some(d) if d > 0.0 && d <= 120.0 => 0.5,
-        _ => 1.0,
-    };
+    let step = quantize_step_secs(duration);
     (time_sec / step).round() as i64
+}
+
+pub fn is_precacheable_url(url: &str) -> bool {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if let Ok(parsed) = url::Url::parse(trimmed) {
+        if parsed.scheme().len() == 1 && std::path::Path::new(trimmed).is_absolute() {
+            return true;
+        }
+        let host = parsed.host_str().unwrap_or("");
+        let port = parsed.port_or_known_default();
+        if matches!(host, "127.0.0.1" | "localhost" | "[::1]" | "::1") && port == Some(11470) {
+            return false;
+        }
+        return matches!(parsed.scheme(), "http" | "https" | "file");
+    }
+    std::path::Path::new(trimmed).is_absolute()
+}
+
+pub fn build_precache_schedule(duration: f64, max_slots: usize) -> VecDeque<f64> {
+    let mut out = VecDeque::new();
+    if !duration.is_finite() || duration <= 10.0 || max_slots == 0 {
+        return out;
+    }
+    let count = ((duration / 15.0).round() as usize).clamp(8, max_slots);
+    let start = duration * 0.02;
+    let end = duration * 0.98;
+    let span = (end - start).max(0.0);
+    let mut slots = Vec::with_capacity(count);
+    if count == 1 {
+        slots.push(duration * 0.5);
+    } else {
+        for i in 0..count {
+            let frac = i as f64 / (count - 1) as f64;
+            slots.push(start + span * frac);
+        }
+    }
+
+    let mut ranges = VecDeque::new();
+    ranges.push_back((0usize, slots.len() - 1));
+    while let Some((lo, hi)) = ranges.pop_front() {
+        if lo > hi {
+            continue;
+        }
+        let mid = lo + (hi - lo) / 2;
+        out.push_back(slots[mid]);
+        if mid > lo {
+            ranges.push_back((lo, mid - 1));
+        }
+        if mid < hi {
+            ranges.push_back((mid + 1, hi));
+        }
+    }
+    out
 }
 
 fn read_video_dimensions(mpv: &Mpv) -> (Option<f64>, Option<f64>) {
@@ -335,18 +408,34 @@ fn read_video_dimensions(mpv: &Mpv) -> (Option<f64>, Option<f64>) {
     (None, None)
 }
 
+fn is_time_pos_matching(
+    mpv: &Mpv,
+    target_time: f64,
+    duration: Option<f64>,
+    render_ready: bool,
+) -> bool {
+    match mpv.get_property::<f64>("time-pos") {
+        Ok(pos) if pos.is_finite() => {
+            duration.is_some_and(|d| d <= 60.0) || (pos - target_time).abs() <= 30.0
+        }
+        _ => render_ready,
+    }
+}
+
 fn send_thumbnail_to_webview(
     webview_cmd_tx: &Sender<WebViewCommand>,
     time: f64,
     data_url: &str,
     width: u32,
     height: u32,
+    is_precache: bool,
 ) {
     let payload = serde_json::json!({
         "time": time,
         "dataUrl": data_url,
         "width": width,
         "height": height,
+        "precache": is_precache,
     });
     if let Ok(payload_json) = serde_json::to_string(&payload) {
         let script = format!(
@@ -359,6 +448,8 @@ fn send_thumbnail_to_webview(
 pub fn spawn_thumbnail_worker(
     webview_cmd_tx: Sender<WebViewCommand>,
     initial_enabled: bool,
+    initial_precache: bool,
+    initial_preview_size: u32,
 ) -> (Sender<ThumbnailCmd>, JoinHandle<()>) {
     let (cmd_tx, cmd_rx) = flume::unbounded::<ThumbnailCmd>();
     let (wake_tx, wake_rx) = flume::bounded::<WorkerWake>(16);
@@ -382,7 +473,15 @@ pub fn spawn_thumbnail_worker(
     let handle = thread::Builder::new()
         .name("thumbfast-worker".to_string())
         .spawn(move || {
-            run_thumbnail_loop(cmd_rx, wake_rx, wake_tx, webview_cmd_tx, initial_enabled);
+            run_thumbnail_loop(
+                cmd_rx,
+                wake_rx,
+                wake_tx,
+                webview_cmd_tx,
+                initial_enabled,
+                initial_precache,
+                initial_preview_size,
+            );
         })
         .expect("failed to start thumbfast worker");
 
@@ -395,8 +494,12 @@ fn run_thumbnail_loop(
     wake_tx: Sender<WorkerWake>,
     webview_cmd_tx: Sender<WebViewCommand>,
     initial_enabled: bool,
+    initial_precache: bool,
+    initial_preview_size: u32,
 ) {
     let mut enabled = initial_enabled;
+    let mut precache_enabled = initial_precache;
+    let mut preview_size = initial_preview_size.clamp(MIN_THUMB_MAX_WIDTH, MAX_THUMB_MAX_WIDTH);
     let mut engine: Option<ThumbnailEngine> = None;
     let mut current_url: Option<String> = None;
     let mut file_ready = false;
@@ -407,6 +510,9 @@ fn run_thumbnail_loop(
     let mut in_flight: Option<InFlightSeek> = None;
     let mut cache: HashMap<(i64, u32), CachedThumb> = HashMap::new();
     let mut cache_order: VecDeque<(i64, u32)> = VecDeque::new();
+    let mut precache_queue: VecDeque<f64> = VecDeque::new();
+    let mut precache_not_before: Option<Instant> = None;
+    let mut precache_consecutive_failures: u32 = 0;
 
     let reset_cache = |cache: &mut HashMap<(i64, u32), CachedThumb>,
                        cache_order: &mut VecDeque<(i64, u32)>| {
@@ -428,6 +534,9 @@ fn run_thumbnail_loop(
                             load_failed = false;
                             load_started_at = None;
                             duration = None;
+                            precache_queue.clear();
+                            precache_not_before = None;
+                            precache_consecutive_failures = 0;
                             reset_cache(&mut cache, &mut cache_order);
                             if let Some(eng) = engine.take() {
                                 let _ = eng.mpv.command("stop", &[]);
@@ -451,10 +560,58 @@ fn run_thumbnail_loop(
                                 load_started_at = Some(Instant::now());
                                 duration = None;
                                 in_flight = None;
+                                precache_queue.clear();
+                                precache_not_before = None;
+                                precache_consecutive_failures = 0;
                                 if let Err(err) = eng.mpv.command("loadfile", &[url.as_str(), "replace"]) {
                                     eprintln!("[ThumbFast] loadfile failed: {err:?}");
                                     load_failed = true;
                                 }
+                            }
+                        }
+                    }
+                }
+                ThumbnailCmd::SetPrecache(next_precache) => {
+                    if precache_enabled != next_precache {
+                        precache_enabled = next_precache;
+                        if !precache_enabled {
+                            precache_queue.clear();
+                            precache_not_before = None;
+                            precache_consecutive_failures = 0;
+                            if in_flight.as_ref().is_some_and(|s| s.is_precache) {
+                                in_flight = None;
+                            }
+                        } else if enabled
+                            && file_ready
+                            && !load_failed
+                            && current_url.as_deref().is_some_and(is_precacheable_url)
+                        {
+                            if let Some(d) = duration {
+                                precache_queue = build_precache_schedule(d, PRECACHE_MAX_SLOTS);
+                                precache_not_before = Some(Instant::now());
+                                precache_consecutive_failures = 0;
+                            }
+                        }
+                    }
+                }
+                ThumbnailCmd::SetPreviewSize(next_size) => {
+                    let clamped = next_size.clamp(MIN_THUMB_MAX_WIDTH, MAX_THUMB_MAX_WIDTH);
+                    if clamped != preview_size {
+                        preview_size = clamped;
+                        reset_cache(&mut cache, &mut cache_order);
+                        if in_flight.as_ref().is_some_and(|s| s.is_precache) {
+                            in_flight = None;
+                        }
+                        if precache_enabled
+                            && enabled
+                            && file_ready
+                            && !load_failed
+                            && current_url.as_deref().is_some_and(is_precacheable_url)
+                        {
+                            if let Some(d) = duration {
+                                precache_queue = build_precache_schedule(d, PRECACHE_MAX_SLOTS);
+                                precache_not_before = Some(Instant::now());
+                                precache_consecutive_failures = 0;
                             }
                         }
                     }
@@ -470,6 +627,9 @@ fn run_thumbnail_loop(
                     duration = None;
                     pending_request = None;
                     in_flight = None;
+                    precache_queue.clear();
+                    precache_not_before = None;
+                    precache_consecutive_failures = 0;
                     reset_cache(&mut cache, &mut cache_order);
 
                     match maybe_url {
@@ -506,6 +666,7 @@ fn run_thumbnail_loop(
                     }
                     let clamped_width = max_width.clamp(MIN_THUMB_MAX_WIDTH, MAX_THUMB_MAX_WIDTH);
                     pending_request = Some((time_sec, clamped_width));
+                    precache_not_before = Some(Instant::now() + PRECACHE_HOVER_COOLDOWN);
                 }
             }
         }
@@ -530,19 +691,37 @@ fn run_thumbnail_loop(
                                 duration = Some(d);
                             }
                         }
+                        if precache_enabled
+                            && enabled
+                            && current_url.as_deref().is_some_and(is_precacheable_url)
+                        {
+                            if let Some(d) = duration {
+                                precache_queue = build_precache_schedule(d, PRECACHE_MAX_SLOTS);
+                                precache_not_before = Some(Instant::now() + PRECACHE_START_DELAY);
+                                precache_consecutive_failures = 0;
+                            }
+                        }
                     }
                     libmpv2_sys::mpv_event_id_MPV_EVENT_PLAYBACK_RESTART => {
                         if let Some(ref mut seek) = in_flight {
-                            seek.seek_settled = true;
+                            let stale_preempt = duration.map_or(false, |d| d > 60.0)
+                                && seek.started_at.elapsed() < Duration::from_millis(2500)
+                                && eng
+                                    .mpv
+                                    .get_property::<f64>("time-pos")
+                                    .ok()
+                                    .filter(|p| p.is_finite())
+                                    .is_some_and(|pos| (pos - seek.clamped_time).abs() > 30.0);
+                            if !stale_preempt {
+                                seek.seek_settled = true;
+                            }
                         }
                     }
                     libmpv2_sys::mpv_event_id_MPV_EVENT_END_FILE => {
                         if !file_ready {
                             load_failed = true;
                         }
-                        if let Some(ref mut seek) = in_flight {
-                            seek.seek_settled = true;
-                        }
+                        in_flight = None;
                     }
                     _ => {}
                 }
@@ -563,58 +742,112 @@ fn run_thumbnail_loop(
                 load_failed = true;
             }
 
-            // 3. Complete in-flight seek & render frame when ready.
-            if let Some(ref seek) = in_flight {
-                let elapsed = seek.started_at.elapsed();
-                let ready_to_render = seek.seek_settled && (seek.render_ready || elapsed > Duration::from_millis(80));
-                if ready_to_render {
-                    let (vw, vh) = read_video_dimensions(&eng.mpv);
-                    let (tw, th) = compute_thumbnail_dimensions(vw, vh, seek.max_width);
-                    match eng.render.render_bgr0(tw, th) {
-                        Ok((bgr0, stride)) => {
-                            let bmp = encode_bgr0_to_bmp(&bgr0, stride, tw as usize, th as usize);
-                            let data_url = format!(
-                                "data:image/bmp;base64,{}",
-                                BASE64_STANDARD.encode(&bmp)
-                            );
-                            let cache_key = (seek.quantized_key, seek.max_width);
-                            if !cache.contains_key(&cache_key) {
-                                if cache_order.len() >= MAX_CACHE_ENTRIES {
-                                    if let Some(old_key) = cache_order.pop_front() {
-                                        cache.remove(&old_key);
-                                    }
-                                }
-                                cache_order.push_back(cache_key);
-                            }
-                            cache.insert(
-                                cache_key,
-                                CachedThumb {
-                                    data_url: data_url.clone(),
-                                    width: tw,
-                                    height: th,
-                                },
-                            );
-                            send_thumbnail_to_webview(
-                                &webview_cmd_tx,
-                                seek.requested_time,
-                                &data_url,
-                                tw,
-                                th,
-                            );
-                        }
-                        Err(err) => {
-                            eprintln!("[ThumbFast] render failed: {err}");
-                        }
-                    }
-                    in_flight = None;
-                } else if elapsed > SEEK_TIMEOUT {
+            // Preempt stale in-flight seek when user requests a new hover spot.
+            if let (Some((req_time, req_width)), Some(ref seek)) = (pending_request, in_flight.as_ref()) {
+                let new_qkey = quantize_time(req_time, duration);
+                if seek.is_precache
+                    || ((seek.quantized_key != new_qkey || seek.max_width != req_width)
+                        && seek.started_at.elapsed() >= PREEMPT_MIN_ELAPSED)
+                {
                     in_flight = None;
                 }
             }
 
-            // 4. Start next pending request if idle.
+            // 3. Complete in-flight seek & render frame when ready.
+            if let Some(ref seek) = in_flight {
+                let elapsed = seek.started_at.elapsed();
+                let ready_to_render = seek.seek_settled
+                    && (seek.render_ready
+                        || (elapsed > Duration::from_millis(80)
+                            && is_time_pos_matching(
+                                &eng.mpv,
+                                seek.clamped_time,
+                                duration,
+                                seek.render_ready,
+                            )));
+                if ready_to_render {
+                    if duration.map_or(true, |d| d > 60.0)
+                        && !is_time_pos_matching(
+                            &eng.mpv,
+                            seek.clamped_time,
+                            duration,
+                            seek.render_ready,
+                        )
+                    {
+                        in_flight = None;
+                    } else {
+                        let (vw, vh) = read_video_dimensions(&eng.mpv);
+                        let (tw, th) = compute_thumbnail_dimensions(vw, vh, seek.max_width);
+                        match eng.render.render_bgr0(tw, th) {
+                            Ok((bgr0, stride)) => {
+                                match encode_bgr0_to_jpeg(
+                                    &bgr0,
+                                    stride,
+                                    tw as usize,
+                                    th as usize,
+                                    JPEG_QUALITY,
+                                ) {
+                                    Ok(jpeg) => {
+                                        let data_url = format!(
+                                            "data:image/jpeg;base64,{}",
+                                            BASE64_STANDARD.encode(&jpeg)
+                                        );
+                                        let cache_key = (seek.quantized_key, seek.max_width);
+                                        if !cache.contains_key(&cache_key) {
+                                            if cache_order.len() >= MAX_CACHE_ENTRIES {
+                                                if let Some(old_key) = cache_order.pop_front() {
+                                                    cache.remove(&old_key);
+                                                }
+                                            }
+                                            cache_order.push_back(cache_key);
+                                        }
+                                        cache.insert(
+                                            cache_key,
+                                            CachedThumb {
+                                                data_url: data_url.clone(),
+                                                width: tw,
+                                                height: th,
+                                            },
+                                        );
+                                        send_thumbnail_to_webview(
+                                            &webview_cmd_tx,
+                                            seek.requested_time,
+                                            &data_url,
+                                            tw,
+                                            th,
+                                            seek.is_precache,
+                                        );
+                                        if seek.is_precache {
+                                            precache_consecutive_failures = 0;
+                                            precache_not_before =
+                                                Some(Instant::now() + PRECACHE_STEP_COOLDOWN);
+                                        }
+                                    }
+                                    Err(err) => {
+                                        eprintln!("[ThumbFast] jpeg encode failed: {err}");
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                eprintln!("[ThumbFast] render failed: {err}");
+                            }
+                        }
+                        in_flight = None;
+                    }
+                } else if elapsed > SEEK_TIMEOUT {
+                    if seek.is_precache {
+                        precache_consecutive_failures = precache_consecutive_failures.saturating_add(1);
+                        if precache_consecutive_failures >= PRECACHE_MAX_CONSECUTIVE_FAILURES {
+                            precache_queue.clear();
+                        }
+                    }
+                    in_flight = None;
+                }
+            }
+
+            // 4. Start next pending request (user hover first, then background precache).
             if enabled && file_ready && !load_failed && in_flight.is_none() {
-                while let Some((req_time, req_width)) = pending_request.take() {
+                if let Some((req_time, req_width)) = pending_request.take() {
                     let qkey = quantize_time(req_time, duration);
                     if let Some(hit) = cache.get(&(qkey, req_width)) {
                         send_thumbnail_to_webview(
@@ -623,38 +856,92 @@ fn run_thumbnail_loop(
                             &hit.data_url,
                             hit.width,
                             hit.height,
+                            false,
                         );
+                    } else {
+                        let clamped_time = match duration {
+                            Some(d) if d > 0.5 => req_time.clamp(0.0, d - 0.25),
+                            _ => req_time.max(0.0),
+                        };
+                        let time_arg = format!("{clamped_time:.3}");
+                        if let Err(err) = eng
+                            .mpv
+                            .command("seek", &[time_arg.as_str(), "absolute+keyframes"])
+                        {
+                            eprintln!("[ThumbFast] seek({time_arg}) failed: {err:?}");
+                        } else {
+                            in_flight = Some(InFlightSeek {
+                                requested_time: req_time,
+                                clamped_time,
+                                quantized_key: qkey,
+                                max_width: req_width,
+                                started_at: Instant::now(),
+                                seek_settled: false,
+                                render_ready: false,
+                                is_precache: false,
+                            });
+                        }
+                    }
+                } else if precache_enabled
+                    && !precache_queue.is_empty()
+                    && precache_not_before.map_or(true, |t| Instant::now() >= t)
+                {
+                    while let Some(precache_time) = precache_queue.pop_front() {
+                        let qkey = quantize_time(precache_time, duration);
+                        if cache.contains_key(&(qkey, preview_size)) {
+                            continue;
+                        }
+                        let clamped_time = match duration {
+                            Some(d) if d > 0.5 => precache_time.clamp(0.0, d - 0.25),
+                            _ => precache_time.max(0.0),
+                        };
+                        let time_arg = format!("{clamped_time:.3}");
+                        if let Err(err) = eng
+                            .mpv
+                            .command("seek", &[time_arg.as_str(), "absolute+keyframes"])
+                        {
+                            eprintln!("[ThumbFast] precache seek({time_arg}) failed: {err:?}");
+                            precache_consecutive_failures =
+                                precache_consecutive_failures.saturating_add(1);
+                            if precache_consecutive_failures >= PRECACHE_MAX_CONSECUTIVE_FAILURES {
+                                precache_queue.clear();
+                            }
+                        } else {
+                            in_flight = Some(InFlightSeek {
+                                requested_time: precache_time,
+                                clamped_time,
+                                quantized_key: qkey,
+                                max_width: preview_size,
+                                started_at: Instant::now(),
+                                seek_settled: false,
+                                render_ready: false,
+                                is_precache: true,
+                            });
+                        }
                         break;
                     }
-
-                    let clamped_time = match duration {
-                        Some(d) if d > 0.5 => req_time.clamp(0.0, d - 0.25),
-                        _ => req_time.max(0.0),
-                    };
-                    let time_arg = format!("{clamped_time:.3}");
-                    if let Err(err) = eng
-                        .mpv
-                        .command("seek", &[time_arg.as_str(), "absolute+keyframes"])
-                    {
-                        eprintln!("[ThumbFast] seek({time_arg}) failed: {err:?}");
-                    } else {
-                        in_flight = Some(InFlightSeek {
-                            requested_time: req_time,
-                            quantized_key: qkey,
-                            max_width: req_width,
-                            started_at: Instant::now(),
-                            seek_settled: false,
-                            render_ready: false,
-                        });
-                    }
-                    break;
                 }
             }
         }
 
-        // 5. Wait for next command, mpv event, or render update (or short poll while seeking).
-        let wait_timeout = if in_flight.is_some() || (!file_ready && !load_failed && load_started_at.is_some()) {
+        // 5. Wait for next command, mpv event, or render update (or short poll while seeking/precaching).
+        let wait_timeout = if in_flight.is_some()
+            || (!file_ready && !load_failed && load_started_at.is_some())
+        {
             Duration::from_millis(20)
+        } else if enabled
+            && file_ready
+            && !load_failed
+            && precache_enabled
+            && !precache_queue.is_empty()
+            && pending_request.is_none()
+        {
+            match precache_not_before {
+                Some(target) => target
+                    .saturating_duration_since(Instant::now())
+                    .clamp(Duration::from_millis(20), Duration::from_millis(200)),
+                None => Duration::from_millis(20),
+            }
         } else {
             Duration::from_secs(60)
         };
@@ -673,7 +960,6 @@ fn run_thumbnail_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::convert::TryInto;
 
     #[test]
     fn test_compute_thumbnail_dimensions() {
@@ -684,29 +970,30 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_bgr0_to_bmp_header_and_pixels() {
-        // 2x2 image in bgr0, stride = 16 (padded)
-        let mut bgr0 = vec![0u8; 16 * 2];
-        // Top row (y=0): pixel(0,0)=(10,20,30), pixel(1,0)=(40,50,60)
-        bgr0[0..4].copy_from_slice(&[10, 20, 30, 255]);
-        bgr0[4..8].copy_from_slice(&[40, 50, 60, 255]);
-        // Bottom row (y=1): pixel(0,1)=(70,80,90), pixel(1,1)=(100,110,120)
-        bgr0[16..20].copy_from_slice(&[70, 80, 90, 255]);
-        bgr0[20..24].copy_from_slice(&[100, 110, 120, 255]);
+    fn test_encode_bgr0_to_jpeg_header_and_size() {
+        let width = 160;
+        let height = 90;
+        let stride = width * 4;
+        let mut bgr0 = vec![0u8; stride * height];
+        for y in 0..height {
+            for x in 0..width {
+                let px = y * stride + x * 4;
+                bgr0[px] = ((x * 2) % 256) as u8;
+                bgr0[px + 1] = ((y * 2) % 256) as u8;
+                bgr0[px + 2] = (((x + y) * 2) % 256) as u8;
+                bgr0[px + 3] = 255;
+            }
+        }
 
-        let bmp = encode_bgr0_to_bmp(&bgr0, 16, 2, 2);
-        // 2px * 3 = 6 bytes per row -> padded to 8 bytes -> 54 + 16 = 70 bytes
-        assert_eq!(bmp.len(), 70);
-        assert_eq!(&bmp[0..2], b"BM");
-        assert_eq!(u32::from_le_bytes(bmp[2..6].try_into().unwrap()), 70);
-        assert_eq!(u32::from_le_bytes(bmp[10..14].try_into().unwrap()), 54);
-        assert_eq!(i32::from_le_bytes(bmp[18..22].try_into().unwrap()), 2);
-        assert_eq!(i32::from_le_bytes(bmp[22..26].try_into().unwrap()), 2);
-        // Bottom-up: row y=1 first
-        assert_eq!(&bmp[54..60], &[70, 80, 90, 100, 110, 120]);
-        assert_eq!(&bmp[60..62], &[0, 0]); // padding
-        // Top row y=0 second
-        assert_eq!(&bmp[62..68], &[10, 20, 30, 40, 50, 60]);
+        let jpeg = encode_bgr0_to_jpeg(&bgr0, stride, width, height, JPEG_QUALITY)
+            .expect("jpeg encode should succeed");
+        assert!(jpeg.starts_with(&[0xFF, 0xD8]));
+        assert!(jpeg.ends_with(&[0xFF, 0xD9]));
+        assert!(
+            jpeg.len() < 54 + 160 * 90 * 3 / 4,
+            "expected JPEG size {} to be much smaller than BMP",
+            jpeg.len()
+        );
     }
 
     #[test]
@@ -762,7 +1049,7 @@ mod tests {
         }
 
         let (wv_tx, wv_rx) = flume::unbounded();
-        let (thumb_tx, _handle) = spawn_thumbnail_worker(wv_tx, true);
+        let (thumb_tx, _handle) = spawn_thumbnail_worker(wv_tx, true, false, 160);
         thumb_tx
             .send(ThumbnailCmd::SetSource(Some(
                 temp_mp4.to_string_lossy().to_string(),
@@ -783,11 +1070,44 @@ mod tests {
         match msg {
             WebViewCommand::ExecuteScript(script) => {
                 assert!(script.contains("__receiveThumbnailPreview"));
-                assert!(script.contains("data:image/bmp;base64,Qk"));
+                assert!(script.contains("data:image/jpeg;base64,/9j/"));
                 assert!(script.contains("\"width\":160"));
                 assert!(script.contains("\"height\":90"));
             }
             _ => panic!("unexpected WebViewCommand"),
+        }
+    }
+
+    #[test]
+    fn test_precache_schedule_and_url_filter() {
+        assert!(!is_precacheable_url("http://127.0.0.1:11470/hash/0"));
+        assert!(!is_precacheable_url("http://localhost:11470/stream.mp4"));
+        assert!(!is_precacheable_url(""));
+        assert!(is_precacheable_url("https://cdn.example.com/movie.mkv"));
+        assert!(is_precacheable_url("http://example.com:8080/video.mp4"));
+        assert!(is_precacheable_url("file:///C:/Videos/test.mp4"));
+        assert!(is_precacheable_url(r"C:\Videos\test.mp4"));
+
+        assert_eq!(quantize_step_secs(Some(60.0)), 0.5);
+        assert_eq!(quantize_step_secs(Some(300.0)), 2.0);
+        assert_eq!(quantize_step_secs(Some(1800.0)), 4.0);
+        assert_eq!(quantize_step_secs(Some(3600.0)), 6.0);
+        assert_eq!(quantize_step_secs(Some(7200.0)), 8.0);
+        assert_eq!(quantize_step_secs(None), 2.0);
+
+        assert!(build_precache_schedule(5.0, PRECACHE_MAX_SLOTS).is_empty());
+        assert!(build_precache_schedule(f64::NAN, PRECACHE_MAX_SLOTS).is_empty());
+
+        let sched = build_precache_schedule(3600.0, 20);
+        assert_eq!(sched.len(), 20);
+        let first = *sched.front().unwrap();
+        assert!(
+            (first - 1800.0).abs() < 250.0,
+            "expected first bisection point near midpoint, got {}",
+            first
+        );
+        for &t in &sched {
+            assert!(t >= 3600.0 * 0.02 - 1e-6 && t <= 3600.0 * 0.98 + 1e-6);
         }
     }
 }

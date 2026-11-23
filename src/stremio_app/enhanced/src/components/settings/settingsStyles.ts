@@ -17,6 +17,7 @@ export const SETTINGS_STYLES = `
 #enhanced[data-show="plugins"] > .enhanced-category:not([data-category="plugins"]),
 #enhanced[data-show="marketplace"] > .enhanced-category:not([data-category="marketplace"]),
 #enhanced[data-show="player"] > .enhanced-category:not([data-category="player"]),
+#enhanced[data-show="general"] > .enhanced-category:not([data-category="general"]),
 #enhanced[data-show="server"] > .enhanced-category:not([data-category="server"]),
 #enhanced[data-show="updates"] > .enhanced-category:not([data-category="updates"]) { display: none; }
 
@@ -55,6 +56,27 @@ export const SETTINGS_STYLES = `
 .enhanced-option-content .button:hover,
 .enhanced-button:hover { background: var(--accent-color, var(--primary-accent-color, #7b5bf5)); }
 
+.enhanced-select {
+    padding: 0.5rem 0.9rem;
+    border-radius: var(--border-radius, 0.5rem);
+    background: var(--surface-background-color, var(--overlay-color, rgba(255, 255, 255, 0.08)));
+    color: var(--foreground-color-primary, var(--primary-foreground-color, #fff));
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    font-size: 0.95rem;
+    font-weight: 500;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.2s, background-color 0.2s;
+}
+.enhanced-select:hover,
+.enhanced-select:focus {
+    border-color: var(--accent-color, var(--primary-accent-color, #7b5bf5));
+}
+.enhanced-select option {
+    background-color: #161522;
+    color: #fff;
+}
+
 .enhanced-link {
     display: block;
     padding: 0.8rem 1rem;
@@ -65,4 +87,103 @@ export const SETTINGS_STYLES = `
 .enhanced-link a { color: inherit; text-decoration: none; }
 .enhanced-link-label { color: var(--foreground-color-primary, var(--primary-foreground-color, #fff)); font-weight: 600; }
 .enhanced-link:hover { background: var(--accent-color, var(--primary-accent-color, #7b5bf5)); }
+
+.enhanced-subsection-title {
+    color: var(--foreground-color-secondary, rgba(255, 255, 255, 0.65));
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin: 1rem 0 0.55rem 0.2rem;
+}
+.enhanced-option-description {
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.55);
+    margin-top: 0.25rem;
+}
+.enhanced-shader-group-title {
+    color: var(--foreground-color-secondary, rgba(255, 255, 255, 0.6));
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin: 0.9rem 0 0.45rem 0.2rem;
+}
+.enhanced-shader-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 0.65rem;
+    margin-bottom: 0.5rem;
+}
+.enhanced-shader-card {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.35rem;
+    padding: 0.85rem 1rem;
+    border-radius: var(--border-radius, 0.75rem);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--surface-background-color, var(--overlay-color, rgba(255, 255, 255, 0.05)));
+    color: var(--foreground-color-primary, var(--primary-foreground-color, #fff));
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.2s, background-color 0.2s, opacity 0.2s;
+}
+.enhanced-shader-card:hover:not(:disabled) {
+    border-color: rgba(255, 255, 255, 0.22);
+    background: rgba(255, 255, 255, 0.09);
+}
+.enhanced-shader-card.active {
+    border-color: var(--accent-color, var(--primary-accent-color, #7b5bf5));
+    background: rgba(123, 91, 245, 0.18);
+}
+.enhanced-shader-card:disabled {
+    opacity: 0.65;
+    cursor: wait;
+}
+.enhanced-shader-card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+.enhanced-shader-card-name {
+    font-weight: 600;
+    font-size: 0.94rem;
+}
+.enhanced-shader-card-desc {
+    font-size: 0.8rem;
+    line-height: 1.35;
+    color: var(--foreground-color-secondary, rgba(255, 255, 255, 0.58));
+}
+.enhanced-shader-badge {
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 0.14rem 0.5rem;
+    border-radius: 999px;
+    flex-shrink: 0;
+}
+.enhanced-shader-badge.ready {
+    background: rgba(81, 207, 102, 0.18);
+    color: #8ce99a;
+}
+.enhanced-shader-badge.download {
+    background: rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.82);
+}
+.enhanced-shader-badge.loading {
+    background: rgba(252, 196, 25, 0.2);
+    color: #ffe066;
+}
+.enhanced-patch-notes {
+    margin-top: 0.9rem;
+    padding: 1rem 1.15rem;
+    border-radius: var(--border-radius, 0.75rem);
+    background: var(--surface-background-color, var(--overlay-color, rgba(255, 255, 255, 0.05)));
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    max-height: 300px;
+    overflow-y: auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+}
 `;

@@ -1,3 +1,5 @@
+pub mod shaders;
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -68,8 +70,24 @@ where
     }
 }
 
+pub const DEFAULT_THUMBNAIL_PREVIEW_SIZE: u32 = 240;
+pub const MIN_THUMBNAIL_PREVIEW_SIZE: u32 = 160;
+pub const MAX_THUMBNAIL_PREVIEW_SIZE: u32 = 360;
+
 fn default_true() -> bool {
     true
+}
+
+fn default_shader_preset() -> String {
+    "off".to_string()
+}
+
+fn default_thumbnail_preview_size() -> u32 {
+    DEFAULT_THUMBNAIL_PREVIEW_SIZE
+}
+
+pub fn clamp_thumbnail_preview_size(size: u32) -> u32 {
+    size.clamp(MIN_THUMBNAIL_PREVIEW_SIZE, MAX_THUMBNAIL_PREVIEW_SIZE)
 }
 
 /// Persistent settings stored in `settings.json`.
@@ -86,6 +104,19 @@ pub struct Settings {
     pub active_theme: Option<String>,
     #[serde(default = "default_true", alias = "thumbnail_preview")]
     pub thumbnail_preview: bool,
+    #[serde(default = "default_true", alias = "thumbnail_precache")]
+    pub thumbnail_precache: bool,
+    #[serde(
+        default = "default_thumbnail_preview_size",
+        alias = "thumbnail_preview_size"
+    )]
+    pub thumbnail_preview_size: u32,
+    #[serde(default = "default_true", alias = "discord_rpc")]
+    pub discord_rpc: bool,
+    #[serde(default = "default_shader_preset", alias = "shader_preset")]
+    pub shader_preset: String,
+    #[serde(default = "default_true", alias = "chapter_markers")]
+    pub chapter_markers: bool,
 }
 
 impl Default for Settings {
@@ -94,6 +125,11 @@ impl Default for Settings {
             enabled_plugins: HashMap::new(),
             active_theme: None,
             thumbnail_preview: true,
+            thumbnail_precache: true,
+            thumbnail_preview_size: DEFAULT_THUMBNAIL_PREVIEW_SIZE,
+            discord_rpc: true,
+            shader_preset: default_shader_preset(),
+            chapter_markers: true,
         }
     }
 }
@@ -178,6 +214,35 @@ pub enum EnhancedAction {
     SetThumbnailPreview {
         enabled: bool,
     },
+    SetThumbnailPrecache {
+        enabled: bool,
+    },
+    SetThumbnailPreviewSize {
+        size: u32,
+    },
+    SetDiscordRpc {
+        enabled: bool,
+    },
+    ExportSettings {
+        id: String,
+        #[serde(default)]
+        plugin_settings: Option<serde_json::Map<String, serde_json::Value>>,
+    },
+    ImportSettings {
+        id: String,
+    },
+    SetShaderPreset {
+        id: String,
+        preset: String,
+    },
+    OpenShadersFolder,
+    GetPlaybackStats {
+        id: String,
+    },
+    GetChapters,
+    SetChapterMarkers {
+        enabled: bool,
+    },
 }
 
 /// Serialized plugin information for the web UI.
@@ -219,6 +284,12 @@ pub struct EnhancedUiData {
     pub client_version: String,
     pub skipped_client_version: Option<String>,
     pub thumbnail_preview: bool,
+    pub thumbnail_precache: bool,
+    pub thumbnail_preview_size: u32,
+    pub discord_rpc: bool,
+    pub shader_preset: String,
+    pub shader_presets: Vec<shaders::ShaderPresetUiData>,
+    pub chapter_markers: bool,
 }
 
 pub fn base_dir() -> PathBuf {
@@ -237,6 +308,7 @@ pub struct EnhancedManager {
     pub base_dir: PathBuf,
     pub plugins_dir: PathBuf,
     pub themes_dir: PathBuf,
+    pub shaders_dir: PathBuf,
     pub settings_path: PathBuf,
     pub settings: Settings,
     pub plugins: Vec<Plugin>,
@@ -255,6 +327,7 @@ impl EnhancedManager {
         let base_dir = base_dir();
         let plugins_dir = base_dir.join("plugins");
         let themes_dir = base_dir.join("themes");
+        let shaders_dir = base_dir.join("shaders");
         let settings_path = base_dir.join("settings.json");
 
         // Ensure directories exist
@@ -268,6 +341,9 @@ impl EnhancedManager {
         if let Err(e) = fs::create_dir_all(&themes_dir) {
             eprintln!("[Enhanced] Failed to create themes directory: {e}");
         }
+        if let Err(e) = fs::create_dir_all(&shaders_dir) {
+            eprintln!("[Enhanced] Failed to create shaders directory: {e}");
+        }
 
         let settings = Self::load_settings(&settings_path);
 
@@ -275,6 +351,7 @@ impl EnhancedManager {
             base_dir,
             plugins_dir,
             themes_dir,
+            shaders_dir,
             settings_path,
             settings,
             plugins: Vec::new(),
@@ -323,6 +400,123 @@ impl EnhancedManager {
     pub fn set_thumbnail_preview(&mut self, enabled: bool) {
         self.settings.thumbnail_preview = enabled;
         self.save_settings();
+    }
+
+    /// Enable or disable background storyboard pre-caching for ThumbFast.
+    pub fn set_thumbnail_precache(&mut self, enabled: bool) {
+        self.settings.thumbnail_precache = enabled;
+        self.save_settings();
+    }
+
+    /// Set the ThumbFast preview card width (clamped to supported bounds).
+    pub fn set_thumbnail_preview_size(&mut self, size: u32) {
+        self.settings.thumbnail_preview_size = clamp_thumbnail_preview_size(size);
+        self.save_settings();
+    }
+
+    /// Enable or disable Discord Rich Presence integration.
+    pub fn set_discord_rpc(&mut self, enabled: bool) {
+        self.settings.discord_rpc = enabled;
+        self.save_settings();
+    }
+
+    /// Persist active GLSL shader preset ID.
+    pub fn set_shader_preset(&mut self, preset: &str) {
+        self.settings.shader_preset = preset.to_string();
+        self.save_settings();
+    }
+
+    /// Enable or disable chapter markers on the player seek bar.
+    pub fn set_chapter_markers(&mut self, enabled: bool) {
+        self.settings.chapter_markers = enabled;
+        self.save_settings();
+    }
+
+    /// Open the shaders directory in the default file manager.
+    pub fn open_shaders_folder(&self) {
+        open_folder(&self.shaders_dir);
+    }
+
+    /// Build a JSON backup string of `settings.json` plus optional `plugin_setting:*` localStorage entries.
+    pub fn build_export_json(
+        &self,
+        plugin_settings: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<String, String> {
+        let mut root = match serde_json::to_value(&self.settings).map_err(|e| e.to_string())? {
+            serde_json::Value::Object(map) => map,
+            _ => return Err("Failed to serialize settings object".to_string()),
+        };
+
+        if let Some(ps) = plugin_settings {
+            let filtered: serde_json::Map<String, serde_json::Value> = ps
+                .iter()
+                .filter(|(k, _)| k.starts_with("plugin_setting:"))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            if !filtered.is_empty() {
+                root.insert(
+                    "pluginSettings".to_string(),
+                    serde_json::Value::Object(filtered),
+                );
+            }
+        }
+
+        serde_json::to_string_pretty(&serde_json::Value::Object(root)).map_err(|e| e.to_string())
+    }
+
+    /// Parse, validate, and apply an imported settings JSON string, returning any extracted `plugin_setting:*` map.
+    pub fn import_settings_json(
+        &mut self,
+        raw_json: &str,
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
+        let val: serde_json::Value =
+            serde_json::from_str(raw_json).map_err(|e| format!("Invalid JSON: {e}"))?;
+        let obj = val
+            .as_object()
+            .ok_or_else(|| "Settings file must contain a JSON object".to_string())?;
+
+        let plugin_settings = obj
+            .get("pluginSettings")
+            .and_then(|v| v.as_object())
+            .map(|ps| {
+                ps.iter()
+                    .filter(|(k, _)| k.starts_with("plugin_setting:"))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<serde_json::Map<String, serde_json::Value>>()
+            })
+            .filter(|m| !m.is_empty());
+
+        let mut imported = serde_json::from_value::<Settings>(val)
+            .map_err(|e| format!("Invalid settings format: {e}"))?;
+        imported.thumbnail_preview_size =
+            clamp_thumbnail_preview_size(imported.thumbnail_preview_size);
+
+        if let Some(ref active) = imported.active_theme {
+            if let Some(matched) = self
+                .themes
+                .iter()
+                .find(|t| t.file_name.eq_ignore_ascii_case(active))
+            {
+                imported.active_theme = Some(matched.file_name.clone());
+            } else {
+                eprintln!(
+                    "[Enhanced] Imported active theme '{}' not found in themes directory, clearing selection",
+                    active
+                );
+                imported.active_theme = None;
+            }
+        }
+
+        for plugin in &self.plugins {
+            imported
+                .enabled_plugins
+                .entry(plugin.file_name.clone())
+                .or_insert(false);
+        }
+
+        self.settings = imported;
+        self.save_settings();
+        Ok(plugin_settings)
     }
 
     /// Open the themes directory in the default file manager.
@@ -512,6 +706,14 @@ impl EnhancedManager {
             client_version: env!("CARGO_PKG_VERSION").to_string(),
             skipped_client_version,
             thumbnail_preview: self.settings.thumbnail_preview,
+            thumbnail_precache: self.settings.thumbnail_precache,
+            thumbnail_preview_size: clamp_thumbnail_preview_size(
+                self.settings.thumbnail_preview_size,
+            ),
+            discord_rpc: self.settings.discord_rpc,
+            shader_preset: self.settings.shader_preset.clone(),
+            shader_presets: shaders::ui_presets(&self.shaders_dir),
+            chapter_markers: self.settings.chapter_markers,
         }
     }
 
@@ -883,6 +1085,57 @@ mod tests {
             _ => panic!("Wrong action"),
         }
 
+        let set_precache = r#"{"action":"setThumbnailPrecache","enabled":false}"#;
+        let action: EnhancedAction = serde_json::from_str(set_precache).unwrap();
+        match action {
+            EnhancedAction::SetThumbnailPrecache { enabled } => {
+                assert!(!enabled);
+            }
+            _ => panic!("Wrong action"),
+        }
+
+        let set_thumb_size = r#"{"action":"setThumbnailPreviewSize","size":320}"#;
+        let action: EnhancedAction = serde_json::from_str(set_thumb_size).unwrap();
+        match action {
+            EnhancedAction::SetThumbnailPreviewSize { size } => {
+                assert_eq!(size, 320);
+            }
+            _ => panic!("Wrong action"),
+        }
+
+        let set_discord = r#"{"action":"setDiscordRpc","enabled":false}"#;
+        let action: EnhancedAction = serde_json::from_str(set_discord).unwrap();
+        match action {
+            EnhancedAction::SetDiscordRpc { enabled } => {
+                assert!(!enabled);
+            }
+            _ => panic!("Wrong action"),
+        }
+
+        let export_settings = r#"{"action":"exportSettings","id":"exp-1","pluginSettings":{"plugin_setting:demo:flag":true}}"#;
+        let action: EnhancedAction = serde_json::from_str(export_settings).unwrap();
+        match action {
+            EnhancedAction::ExportSettings { id, plugin_settings } => {
+                assert_eq!(id, "exp-1");
+                assert_eq!(
+                    plugin_settings
+                        .as_ref()
+                        .and_then(|m| m.get("plugin_setting:demo:flag")),
+                    Some(&serde_json::json!(true))
+                );
+            }
+            _ => panic!("Wrong action"),
+        }
+
+        let import_settings = r#"{"action":"importSettings","id":"imp-1"}"#;
+        let action: EnhancedAction = serde_json::from_str(import_settings).unwrap();
+        match action {
+            EnhancedAction::ImportSettings { id } => {
+                assert_eq!(id, "imp-1");
+            }
+            _ => panic!("Wrong action"),
+        }
+
         let skip_client = r#"{"action":"skipClientVersion","version":"5.0.27-enhanced.4"}"#;
         let action: EnhancedAction = serde_json::from_str(skip_client).unwrap();
         match action {
@@ -891,21 +1144,58 @@ mod tests {
             }
             _ => panic!("Wrong action"),
         }
+
+        let set_shader = r#"{"action":"setShaderPreset","id":"sh_1","preset":"anime4k-a-fast"}"#;
+        match serde_json::from_str::<EnhancedAction>(set_shader).unwrap() {
+            EnhancedAction::SetShaderPreset { id, preset } => {
+                assert_eq!(id, "sh_1");
+                assert_eq!(preset, "anime4k-a-fast");
+            }
+            _ => panic!("Wrong action"),
+        }
+
+        let open_shaders = r#"{"action":"openShadersFolder"}"#;
+        assert!(matches!(
+            serde_json::from_str::<EnhancedAction>(open_shaders).unwrap(),
+            EnhancedAction::OpenShadersFolder
+        ));
+
+        let get_stats = r#"{"action":"getPlaybackStats","id":"st_1"}"#;
+        match serde_json::from_str::<EnhancedAction>(get_stats).unwrap() {
+            EnhancedAction::GetPlaybackStats { id } => assert_eq!(id, "st_1"),
+            _ => panic!("Wrong action"),
+        }
+
+        let get_chapters = r#"{"action":"getChapters"}"#;
+        assert!(matches!(
+            serde_json::from_str::<EnhancedAction>(get_chapters).unwrap(),
+            EnhancedAction::GetChapters
+        ));
+
+        let set_chapters = r#"{"action":"setChapterMarkers","enabled":false}"#;
+        match serde_json::from_str::<EnhancedAction>(set_chapters).unwrap() {
+            EnhancedAction::SetChapterMarkers { enabled } => assert!(!enabled),
+            _ => panic!("Wrong action"),
+        }
     }
 
     #[test]
     fn test_deserialize_settings() {
         // Snake case map
-        let json1 = r#"{"enabled_plugins":{"test.js":true},"active_theme":"dark.css"}"#;
+        let json1 = r#"{"enabled_plugins":{"test.js":true},"active_theme":"dark.css","shader_preset":"fsrcnnx-8","chapter_markers":false}"#;
         let s1: Settings = serde_json::from_str(json1).unwrap();
         assert_eq!(s1.enabled_plugins.get("test.js"), Some(&true));
         assert_eq!(s1.active_theme.as_deref(), Some("dark.css"));
+        assert_eq!(s1.shader_preset, "fsrcnnx-8");
+        assert!(!s1.chapter_markers);
 
         // Camel case map
-        let json2 = r#"{"enabledPlugins":{"test.js":false},"activeTheme":"amoled.css"}"#;
+        let json2 = r#"{"enabledPlugins":{"test.js":false},"activeTheme":"amoled.css","shaderPreset":"artcnn-c4f32","chapterMarkers":true}"#;
         let s2: Settings = serde_json::from_str(json2).unwrap();
         assert_eq!(s2.enabled_plugins.get("test.js"), Some(&false));
         assert_eq!(s2.active_theme.as_deref(), Some("amoled.css"));
+        assert_eq!(s2.shader_preset, "artcnn-c4f32");
+        assert!(s2.chapter_markers);
 
         // Array list of enabled plugins
         let json3 = r#"{"enabledPlugins":["test1.js","test2.js"],"activeTheme":null}"#;
@@ -913,12 +1203,114 @@ mod tests {
         assert_eq!(s3.enabled_plugins.get("test1.js"), Some(&true));
         assert_eq!(s3.enabled_plugins.get("test2.js"), Some(&true));
         assert_eq!(s3.active_theme, None);
+        assert_eq!(s3.shader_preset, "off");
+        assert!(s3.chapter_markers);
 
         // Empty json
         let json4 = r#"{}"#;
         let s4: Settings = serde_json::from_str(json4).unwrap();
         assert!(s4.enabled_plugins.is_empty());
         assert_eq!(s4.active_theme, None);
+        assert!(s4.thumbnail_preview);
+        assert!(s4.thumbnail_precache);
+        assert_eq!(s4.thumbnail_preview_size, DEFAULT_THUMBNAIL_PREVIEW_SIZE);
+        assert!(s4.discord_rpc);
+        assert_eq!(s4.shader_preset, "off");
+        assert!(s4.chapter_markers);
+    }
+
+    #[test]
+    fn test_export_and_import_settings_round_trip() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "stremio_enhanced_settings_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_root);
+        let plugins_dir = temp_root.join("plugins");
+        let themes_dir = temp_root.join("themes");
+        let shaders_dir = temp_root.join("shaders");
+        fs::create_dir_all(&plugins_dir).unwrap();
+        fs::create_dir_all(&themes_dir).unwrap();
+        fs::create_dir_all(&shaders_dir).unwrap();
+
+        let mut mgr = EnhancedManager {
+            base_dir: temp_root.clone(),
+            plugins_dir,
+            themes_dir,
+            shaders_dir,
+            settings_path: temp_root.join("settings.json"),
+            settings: Settings {
+                enabled_plugins: std::iter::once(("alpha.plugin.js".to_string(), true)).collect(),
+                active_theme: Some("amoled.theme.css".to_string()),
+                thumbnail_preview: false,
+                thumbnail_precache: false,
+                thumbnail_preview_size: 320,
+                discord_rpc: false,
+                shader_preset: "cas-balanced".to_string(),
+                chapter_markers: false,
+            },
+            plugins: vec![Plugin {
+                file_name: "beta.plugin.js".to_string(),
+                metadata: Metadata {
+                    name: "Beta".to_string(),
+                    description: String::new(),
+                    update_url: String::new(),
+                    version: "1.0.0".to_string(),
+                    author: "Test".to_string(),
+                },
+                content: String::new(),
+            }],
+            themes: vec![Theme {
+                file_name: "amoled.theme.css".to_string(),
+                metadata: Metadata {
+                    name: "AMOLED".to_string(),
+                    description: String::new(),
+                    update_url: String::new(),
+                    version: "1.0.0".to_string(),
+                    author: "Test".to_string(),
+                },
+                content: String::new(),
+            }],
+        };
+
+        let mut ps = serde_json::Map::new();
+        ps.insert(
+            "plugin_setting:alpha:token".to_string(),
+            serde_json::json!("abc123"),
+        );
+        ps.insert("unrelated_key".to_string(), serde_json::json!("ignored"));
+
+        let exported = mgr.build_export_json(Some(&ps)).unwrap();
+        assert!(exported.contains("plugin_setting:alpha:token"));
+        assert!(!exported.contains("unrelated_key"));
+
+        mgr.settings = Settings::default();
+        let imported_ps = mgr.import_settings_json(&exported).unwrap().unwrap();
+        assert_eq!(
+            imported_ps.get("plugin_setting:alpha:token"),
+            Some(&serde_json::json!("abc123"))
+        );
+        assert!(!imported_ps.contains_key("unrelated_key"));
+        assert!(!mgr.settings.thumbnail_preview);
+        assert!(!mgr.settings.thumbnail_precache);
+        assert_eq!(mgr.settings.thumbnail_preview_size, 320);
+        assert!(!mgr.settings.discord_rpc);
+        assert_eq!(mgr.settings.active_theme.as_deref(), Some("amoled.theme.css"));
+        assert_eq!(mgr.settings.enabled_plugins.get("alpha.plugin.js"), Some(&true));
+        assert_eq!(mgr.settings.enabled_plugins.get("beta.plugin.js"), Some(&false));
+
+        // Raw settings.json without pluginSettings, with missing theme & out-of-range size
+        let raw_json = r#"{"enabledPlugins":{},"activeTheme":"Missing.theme.css","thumbnailPreview":true,"thumbnailPreviewSize":999,"discordRpc":true}"#;
+        let imported_none = mgr.import_settings_json(raw_json).unwrap();
+        assert!(imported_none.is_none());
+        assert_eq!(mgr.settings.thumbnail_preview_size, MAX_THUMBNAIL_PREVIEW_SIZE);
+        assert_eq!(mgr.settings.active_theme, None);
+
+        // Rejects non-object / invalid JSON
+        assert!(mgr.import_settings_json("[1,2,3]").is_err());
+        assert!(mgr.import_settings_json("{not json").is_err());
+
+        let _ = fs::remove_dir_all(&temp_root);
     }
 
     #[test]

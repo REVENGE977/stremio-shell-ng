@@ -13,6 +13,11 @@ import { updateUpdateManagerData, checkForAllUpdates, checkClientUpdate } from '
 import { checkSettings } from './components/settings/settingsInjector';
 import { setupServerManager, updateServerManagerData, checkServerJsUpdateAndSetup } from './server/serverManager';
 import { setupThumbnailPreview, updateThumbnailPreviewData } from './player/thumbnailPreview';
+import { setupShaderControls, updateShaderControlsData } from './player/shaderControls';
+import { setupStatsOverlay } from './player/statsOverlay';
+import { setupChapterMarkers, updateChapterMarkersData } from './player/chapterMarkers';
+import { setupSettingsTransferHandlers, updateEnhancedSettingsData } from './settings/enhancedSettings';
+import { setupKeyboardNavigationFix } from './navigation/keyboardNavFix';
 import { EnhancedData } from './types';
 
 (function () {
@@ -27,6 +32,7 @@ import { EnhancedData } from './types';
 
     // Initialize subsystems
     setupPermanentCore();
+    setupKeyboardNavigationFix();
     setupLogger();
     setupFetchInterceptor();
     setupEnhancedApi();
@@ -35,6 +41,10 @@ import { EnhancedData } from './types';
     setupTransparencyBridge();
     setupVideoBridge();
     setupThumbnailPreview();
+    setupShaderControls();
+    setupStatsOverlay();
+    setupChapterMarkers();
+    setupSettingsTransferHandlers();
     injectFallbackStyles();
 
     let currentData: EnhancedData = {
@@ -42,6 +52,7 @@ import { EnhancedData } from './types';
         themes: [],
         activeTheme: null
     };
+    let lastAppliedThemeKey: string | undefined;
 
     function updateAllSubsystemData(data: EnhancedData) {
         currentData = data;
@@ -51,6 +62,9 @@ import { EnhancedData } from './types';
         updateMarketplaceData(data);
         updateUpdateManagerData(data);
         updateThumbnailPreviewData(data);
+        updateShaderControlsData(data);
+        updateChapterMarkersData(data);
+        updateEnhancedSettingsData(data);
         if (data.serverStatus) {
             updateServerManagerData(data.serverStatus);
         }
@@ -61,11 +75,12 @@ import { EnhancedData } from './types';
         if (!data) return;
         updateAllSubsystemData(data);
 
-        // Auto-apply active theme
-        if (currentData.activeTheme) {
-            applyThemeUI(currentData.activeTheme);
-        } else {
-            applyThemeUI('Default');
+        // Auto-apply active theme only when it changed or style tag went missing
+        const nextTheme = currentData.activeTheme || 'Default';
+        const activeThemeMissing = nextTheme !== 'Default' && !document.getElementById('activeTheme');
+        if (nextTheme !== lastAppliedThemeKey || activeThemeMissing) {
+            lastAppliedThemeKey = nextTheme;
+            applyThemeUI(nextTheme);
         }
 
         // Auto-load all enabled plugins
@@ -89,7 +104,10 @@ import { EnhancedData } from './types';
     if ((window as any).__INITIAL_ENHANCED_DATA__) {
         updateAllSubsystemData((window as any).__INITIAL_ENHANCED_DATA__);
         if (currentData.activeTheme) {
+            lastAppliedThemeKey = currentData.activeTheme;
             applyThemeUI(currentData.activeTheme);
+        } else {
+            lastAppliedThemeKey = 'Default';
         }
         syncLocalStorage();
     }

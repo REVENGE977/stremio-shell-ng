@@ -24,10 +24,11 @@ use crate::stremio_app::{
         is_trusted_shell_navigation_url, safe_url, web_endpoint_with_streaming_server, APP_NAME,
         UPDATE_INTERVAL, WEB_ENDPOINT, WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH,
     },
-    enhanced::{theme_injection_script, EnhancedAction, EnhancedManager},
+    enhanced::{shaders, theme_injection_script, EnhancedAction, EnhancedManager},
     ipc::{CacheDirectoryRequest, RPCRequest, RPCResponse},
     splash::SplashImage,
     stremio_player::{
+        get_chapters, get_playback_stats, set_glsl_shaders,
         thumbnailer::{spawn_thumbnail_worker, ThumbnailCmd, DEFAULT_THUMB_MAX_WIDTH},
         CmdVal, InMsg, InMsgArgs, InMsgFn, Player,
     },
@@ -68,6 +69,12 @@ pub enum OpenRequest {
     Reset,
 }
 
+#[derive(Clone)]
+pub struct ExportSettingsRequest {
+    pub id: String,
+    pub plugin_settings: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
 #[derive(Default, NwgUi)]
 pub struct MainWindow {
     pub command: String,
@@ -86,9 +93,14 @@ pub struct MainWindow {
     pub requested_pip_resize: Arc<Mutex<Option<u32>>>,
     pub pip_mode_active: Arc<std::sync::atomic::AtomicBool>,
     pub requested_cache_directory: Arc<Mutex<Option<CacheDirectoryRequest>>>,
+    pub requested_export_settings: Arc<Mutex<Option<ExportSettingsRequest>>>,
+    pub requested_import_settings: Arc<Mutex<Option<String>>>,
     pub requested_interface_scale: Arc<Mutex<Option<u64>>>,
     pub saved_window_style: RefCell<WindowStyle>,
     pub open_media_sender: RefCell<Option<flume::Sender<OpenRequest>>>,
+    pub thumbnail_tx: RefCell<Option<flume::Sender<ThumbnailCmd>>>,
+    pub active_stream_url: Arc<Mutex<Option<String>>>,
+    pub discord_rpc: RefCell<Option<DiscordRpc>>,
     pub local_server_url: Arc<Mutex<Option<String>>>,
     pub webui_events: WebUiEvents,
     pub webui_ready: Cell<bool>,
@@ -100,6 +112,10 @@ pub struct MainWindow {
     pub window_icon: nwg::Icon,
     #[nwg_resource(title: "Choose cache folder", action: nwg::FileDialogAction::OpenDirectory)]
     pub cache_directory_picker: nwg::FileDialog,
+    #[nwg_resource(title: "Export Stremio Enhanced Settings", action: nwg::FileDialogAction::Save, filters: "JSON Files(*.json)")]
+    pub export_settings_picker: nwg::FileDialog,
+    #[nwg_resource(title: "Import Stremio Enhanced Settings", action: nwg::FileDialogAction::Open, filters: "JSON Files(*.json)")]
+    pub import_settings_picker: nwg::FileDialog,
     #[nwg_control(icon: Some(&data.window_icon), title: APP_NAME, flags: "MAIN_WINDOW")]
     #[nwg_events(
         OnWindowClose: [Self::on_quit(SELF, EVT_DATA)],
@@ -167,6 +183,12 @@ pub struct MainWindow {
     #[nwg_control]
     #[nwg_events(OnNotice: [Self::on_pip_resize_notice])]
     pub pip_resize_notice: nwg::Notice,
+    #[nwg_control]
+    #[nwg_events(OnNotice: [Self::on_export_settings_notice])]
+    pub export_settings_notice: nwg::Notice,
+    #[nwg_control]
+    #[nwg_events(OnNotice: [Self::on_import_settings_notice])]
+    pub import_settings_notice: nwg::Notice,
 }
 
 impl MainWindow {
@@ -285,14 +307,39 @@ impl MainWindow {
             spawn_single_instance_listener(listener, self.focus_notice.sender(), open_sender.clone());
         }
 
-        let initial_thumb_enabled = self.enhanced.lock().unwrap().settings.thumbnail_preview;
-        let (thumbnail_tx, _thumbnail_handle) =
-            spawn_thumbnail_worker(self.webview.get_command_sender(), initial_thumb_enabled);
-        let active_stream_url: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let (initial_thumb_enabled, initial_thumb_precache, initial_thumb_size, initial_shader_paths) = {
+            let mgr = self.enhanced.lock().unwrap();
+            let shader_paths = if mgr.settings.shader_preset != "off" {
+                shaders::resolve_preset_paths(&mgr.shaders_dir, &mgr.settings.shader_preset)
+            } else {
+                Vec::new()
+            };
+            (
+                mgr.settings.thumbnail_preview,
+                mgr.settings.thumbnail_precache,
+                mgr.settings.thumbnail_preview_size,
+                shader_paths,
+            )
+        };
+        if !initial_shader_paths.is_empty() {
+            if let Some(ref mpv) = self.player.mpv {
+                set_glsl_shaders(mpv, &initial_shader_paths);
+            }
+        }
+        let (thumbnail_tx, _thumbnail_handle) = spawn_thumbnail_worker(
+            self.webview.get_command_sender(),
+            initial_thumb_enabled,
+            initial_thumb_precache,
+            initial_thumb_size,
+        );
+        *self.thumbnail_tx.borrow_mut() = Some(thumbnail_tx.clone());
+        let active_stream_url = self.active_stream_url.clone();
 
         // Forward messages from player to WebView
         let thumbnail_tx_player = thumbnail_tx.clone();
         let active_stream_url_player = active_stream_url.clone();
+        let player_mpv_events = self.player.mpv.clone();
+        let webview_cmd_tx_player = self.webview.get_command_sender();
         thread::spawn(move || {
             for msg in player_rx.iter() {
                 if msg.contains("mpv-event-video-ready") {
@@ -306,25 +353,45 @@ impl MainWindow {
                         if is_ready {
                             let url = active_stream_url_player.lock().unwrap().clone();
                             let _ = thumbnail_tx_player.send(ThumbnailCmd::SetSource(url));
+                            if let Some(ref mpv) = player_mpv_events {
+                                let chapters = get_chapters(mpv);
+                                if let Ok(json) = serde_json::to_string(&chapters) {
+                                    send_js_callback(
+                                        &webview_cmd_tx_player,
+                                        "__receiveChapters",
+                                        &[json],
+                                    );
+                                }
+                            }
                         }
                     }
                 } else if msg.contains("mpv-event-ended") {
                     let _ = thumbnail_tx_player.send(ThumbnailCmd::SetSource(None));
+                    send_js_callback(
+                        &webview_cmd_tx_player,
+                        "__receiveChapters",
+                        &["[]".to_string()],
+                    );
                 }
                 web_tx_player.send(msg).ok();
             }
         });
 
+        let discord_rpc = DiscordRpc::new(web_tx.clone());
+        *self.discord_rpc.borrow_mut() = Some(discord_rpc.clone());
+
         let bridge = IpcBridgeContext {
             web_tx: web_tx.clone(),
             player_tx,
+            player_mpv: self.player.mpv.clone(),
+            window_handle: self.player.window_handle,
             updater_tx,
             open_sender,
             webview_cmd_tx: self.webview.get_command_sender(),
             enhanced: self.enhanced.clone(),
             thumbnail_tx,
             active_stream_url,
-            discord_rpc: DiscordRpc::new(web_tx.clone()),
+            discord_rpc,
             toggle_fullscreen_sender: self.toggle_fullscreen_notice.sender(),
             set_interface_scale_sender: self.set_interface_scale_notice.sender(),
             quit_sender: self.quit_notice.sender(),
@@ -337,9 +404,13 @@ impl MainWindow {
             toggle_pip_sender: self.toggle_pip_notice.sender(),
             pip_drag_sender: self.pip_drag_notice.sender(),
             pip_resize_sender: self.pip_resize_notice.sender(),
+            export_settings_sender: self.export_settings_notice.sender(),
+            import_settings_sender: self.import_settings_notice.sender(),
             autoupdater_setup_file: self.autoupdater_setup_file.clone(),
             requested_fullscreen: self.requested_fullscreen.clone(),
             requested_cache_directory: self.requested_cache_directory.clone(),
+            requested_export_settings: self.requested_export_settings.clone(),
+            requested_import_settings: self.requested_import_settings.clone(),
             local_server_url: self.local_server_url.clone(),
             requested_interface_scale: self.requested_interface_scale.clone(),
             webui_events: self.webui_events.clone(),
@@ -670,6 +741,209 @@ impl MainWindow {
                 .ok();
         }
     }
+    fn on_export_settings_notice(&self) {
+        let Some(request) = self.requested_export_settings.lock().unwrap().clone() else {
+            return;
+        };
+        let default_dir = self
+            .enhanced
+            .lock()
+            .unwrap()
+            .base_dir
+            .to_string_lossy()
+            .to_string();
+        self.export_settings_picker
+            .set_default_folder(&default_dir)
+            .ok();
+
+        let payload = if self.export_settings_picker.run(Some(&self.window)) {
+            match self
+                .export_settings_picker
+                .get_selected_item()
+                .map_err(|e| e.to_string())
+                .and_then(|os| {
+                    os.into_string()
+                        .map(PathBuf::from)
+                        .map_err(|_| "The selected file path is not valid Unicode".to_string())
+                }) {
+                Ok(mut path) => {
+                    if path.extension().is_none() {
+                        path.set_extension("json");
+                    }
+                    let json_res = self
+                        .enhanced
+                        .lock()
+                        .unwrap()
+                        .build_export_json(request.plugin_settings.as_ref());
+                    match json_res.and_then(|json| {
+                        std::fs::write(&path, json).map_err(|e| e.to_string())
+                    }) {
+                        Ok(()) => serde_json::json!({
+                            "ok": true,
+                            "path": path.to_string_lossy().to_string(),
+                        }),
+                        Err(err) => serde_json::json!({
+                            "ok": false,
+                            "error": err,
+                        }),
+                    }
+                }
+                Err(err) => serde_json::json!({
+                    "ok": false,
+                    "error": err,
+                }),
+            }
+        } else {
+            serde_json::json!({
+                "ok": false,
+                "cancelled": true,
+            })
+        };
+
+        self.requested_export_settings.lock().unwrap().take();
+        if let (Ok(id_json), Ok(payload_json)) = (
+            serde_json::to_string(&request.id),
+            serde_json::to_string(&payload),
+        ) {
+            send_js_callback(
+                &self.webview.get_command_sender(),
+                "__receiveExportSettingsResult",
+                &[id_json, payload_json],
+            );
+        }
+    }
+    fn on_import_settings_notice(&self) {
+        let Some(request_id) = self.requested_import_settings.lock().unwrap().clone() else {
+            return;
+        };
+        let default_dir = self
+            .enhanced
+            .lock()
+            .unwrap()
+            .base_dir
+            .to_string_lossy()
+            .to_string();
+        self.import_settings_picker
+            .set_default_folder(&default_dir)
+            .ok();
+
+        let payload = if self.import_settings_picker.run(Some(&self.window)) {
+            match self
+                .import_settings_picker
+                .get_selected_item()
+                .map_err(|e| e.to_string())
+                .and_then(|os| {
+                    os.into_string()
+                        .map(PathBuf::from)
+                        .map_err(|_| "The selected file path is not valid Unicode".to_string())
+                })
+                .and_then(|path| std::fs::read_to_string(&path).map_err(|e| e.to_string()))
+            {
+                Ok(raw_json) => {
+                    let import_res = {
+                        let mut mgr = self.enhanced.lock().unwrap();
+                        mgr.import_settings_json(&raw_json).map(|plugin_settings| {
+                            let css = mgr.active_theme().map(|t| t.content.clone());
+                            let thumb_enabled = mgr.settings.thumbnail_preview;
+                            let thumb_precache = mgr.settings.thumbnail_precache;
+                            let thumb_size = mgr.settings.thumbnail_preview_size;
+                            let discord_enabled = mgr.settings.discord_rpc;
+                            let shader_paths = if mgr.settings.shader_preset != "off" {
+                                shaders::resolve_preset_paths(
+                                    &mgr.shaders_dir,
+                                    &mgr.settings.shader_preset,
+                                )
+                            } else {
+                                Vec::new()
+                            };
+                            let cmd_tx = self.webview.get_command_sender();
+                            let theme_script = theme_injection_script(css.as_deref());
+                            cmd_tx
+                                .send(WebViewCommand::ExecuteScript(theme_script))
+                                .ok();
+                            send_enhanced_ui_data(&mgr, &cmd_tx);
+                            (
+                                plugin_settings,
+                                thumb_enabled,
+                                thumb_precache,
+                                thumb_size,
+                                discord_enabled,
+                                shader_paths,
+                            )
+                        })
+                    };
+
+                    match import_res {
+                        Ok((
+                            plugin_settings,
+                            thumb_enabled,
+                            thumb_precache,
+                            thumb_size,
+                            discord_enabled,
+                            shader_paths,
+                        )) => {
+                            if let Some(ref mpv) = self.player.mpv {
+                                set_glsl_shaders(mpv, &shader_paths);
+                            }
+                            if let Some(tx) = self.thumbnail_tx.borrow().as_ref() {
+                                let _ = tx.send(ThumbnailCmd::SetPreviewSize(thumb_size));
+                                let _ = tx.send(ThumbnailCmd::SetPrecache(thumb_precache));
+                                let _ = tx.send(ThumbnailCmd::SetEnabled(thumb_enabled));
+                                if thumb_enabled {
+                                    if let Some(url) = self.active_stream_url.lock().unwrap().clone()
+                                    {
+                                        let _ = tx.send(ThumbnailCmd::SetSource(Some(url)));
+                                    }
+                                }
+                            }
+                            if let Some(rpc) = self.discord_rpc.borrow().as_ref() {
+                                if !discord_enabled {
+                                    let _ = rpc.clear_activity();
+                                    let _ = rpc.disconnect();
+                                    if let Ok(web_channel) = self.webview.channel.try_borrow() {
+                                        if let Some((web_tx, _)) = web_channel.as_ref() {
+                                            web_tx.send(RPCResponse::discord_status(false)).ok();
+                                        }
+                                    }
+                                } else {
+                                    let _ = rpc.connect();
+                                }
+                            }
+                            serde_json::json!({
+                                "ok": true,
+                                "pluginSettings": plugin_settings,
+                            })
+                        }
+                        Err(err) => serde_json::json!({
+                            "ok": false,
+                            "error": err,
+                        }),
+                    }
+                }
+                Err(err) => serde_json::json!({
+                    "ok": false,
+                    "error": err,
+                }),
+            }
+        } else {
+            serde_json::json!({
+                "ok": false,
+                "cancelled": true,
+            })
+        };
+
+        self.requested_import_settings.lock().unwrap().take();
+        if let (Ok(id_json), Ok(payload_json)) = (
+            serde_json::to_string(&request_id),
+            serde_json::to_string(&payload),
+        ) {
+            send_js_callback(
+                &self.webview.get_command_sender(),
+                "__receiveImportSettingsResult",
+                &[id_json, payload_json],
+            );
+        }
+    }
     fn on_focus_notice(&self) {
         self.window.set_visible(true);
         if let Some(hwnd) = self.window.handle.hwnd() {
@@ -731,6 +1005,8 @@ impl MainWindow {
 struct IpcBridgeContext {
     web_tx: flume::Sender<String>,
     player_tx: flume::Sender<String>,
+    player_mpv: Option<Arc<libmpv2::Mpv>>,
+    window_handle: isize,
     updater_tx: flume::Sender<String>,
     open_sender: flume::Sender<OpenRequest>,
     webview_cmd_tx: flume::Sender<WebViewCommand>,
@@ -750,9 +1026,13 @@ struct IpcBridgeContext {
     toggle_pip_sender: nwg::NoticeSender,
     pip_drag_sender: nwg::NoticeSender,
     pip_resize_sender: nwg::NoticeSender,
+    export_settings_sender: nwg::NoticeSender,
+    import_settings_sender: nwg::NoticeSender,
     autoupdater_setup_file: Arc<Mutex<Option<PathBuf>>>,
     requested_fullscreen: Arc<Mutex<Option<bool>>>,
     requested_cache_directory: Arc<Mutex<Option<CacheDirectoryRequest>>>,
+    requested_export_settings: Arc<Mutex<Option<ExportSettingsRequest>>>,
+    requested_import_settings: Arc<Mutex<Option<String>>>,
     local_server_url: Arc<Mutex<Option<String>>>,
     requested_interface_scale: Arc<Mutex<Option<u64>>>,
     webui_events: WebUiEvents,
@@ -1063,6 +1343,177 @@ fn handle_enhanced_action(action: EnhancedAction, ctx: &IpcBridgeContext) {
             }
             send_enhanced_ui_data(&mgr, &ctx.webview_cmd_tx);
         }
+        EnhancedAction::SetThumbnailPreviewSize { size } => {
+            let mut mgr = ctx.enhanced.lock().unwrap();
+            mgr.set_thumbnail_preview_size(size);
+            let _ = ctx.thumbnail_tx.send(ThumbnailCmd::SetPreviewSize(size));
+            send_enhanced_ui_data(&mgr, &ctx.webview_cmd_tx);
+        }
+        EnhancedAction::SetThumbnailPrecache { enabled } => {
+            let mut mgr = ctx.enhanced.lock().unwrap();
+            mgr.set_thumbnail_precache(enabled);
+            let _ = ctx.thumbnail_tx.send(ThumbnailCmd::SetPrecache(enabled));
+            send_enhanced_ui_data(&mgr, &ctx.webview_cmd_tx);
+        }
+        EnhancedAction::SetDiscordRpc { enabled } => {
+            let mut mgr = ctx.enhanced.lock().unwrap();
+            mgr.set_discord_rpc(enabled);
+            if !enabled {
+                if let Err(e) = ctx.discord_rpc.clear_activity() {
+                    eprintln!("Discord clear activity error: {e}");
+                }
+                if let Err(e) = ctx.discord_rpc.disconnect() {
+                    eprintln!("Discord disconnect error: {e}");
+                }
+                ctx.web_tx.send(RPCResponse::discord_status(false)).ok();
+            } else if let Err(e) = ctx.discord_rpc.connect() {
+                eprintln!("Discord connect error: {e}");
+            }
+            send_enhanced_ui_data(&mgr, &ctx.webview_cmd_tx);
+        }
+        EnhancedAction::ExportSettings {
+            id,
+            plugin_settings,
+        } => {
+            let mut pending = ctx.requested_export_settings.lock().unwrap();
+            if pending.is_some() {
+                drop(pending);
+                if let (Ok(id_json), Ok(payload_json)) = (
+                    serde_json::to_string(&id),
+                    serde_json::to_string(&serde_json::json!({
+                        "ok": false,
+                        "error": "An export dialog is already open",
+                    })),
+                ) {
+                    send_js_callback(
+                        &ctx.webview_cmd_tx,
+                        "__receiveExportSettingsResult",
+                        &[id_json, payload_json],
+                    );
+                }
+            } else {
+                *pending = Some(ExportSettingsRequest {
+                    id,
+                    plugin_settings,
+                });
+                ctx.export_settings_sender.notice();
+            }
+        }
+        EnhancedAction::ImportSettings { id } => {
+            let mut pending = ctx.requested_import_settings.lock().unwrap();
+            if pending.is_some() {
+                drop(pending);
+                if let (Ok(id_json), Ok(payload_json)) = (
+                    serde_json::to_string(&id),
+                    serde_json::to_string(&serde_json::json!({
+                        "ok": false,
+                        "error": "An import dialog is already open",
+                    })),
+                ) {
+                    send_js_callback(
+                        &ctx.webview_cmd_tx,
+                        "__receiveImportSettingsResult",
+                        &[id_json, payload_json],
+                    );
+                }
+            } else {
+                *pending = Some(id);
+                ctx.import_settings_sender.notice();
+            }
+        }
+        EnhancedAction::OpenShadersFolder => {
+            ctx.enhanced.lock().unwrap().open_shaders_folder();
+        }
+        EnhancedAction::SetShaderPreset { id, preset } => {
+            let shaders_dir = ctx.enhanced.lock().unwrap().shaders_dir.clone();
+            let preset_def = shaders::find_preset(&preset);
+            let is_off_or_installed = preset == "off"
+                || preset_def.is_some_and(|def| shaders::is_preset_installed(&shaders_dir, def));
+
+            if is_off_or_installed {
+                let paths = shaders::resolve_preset_paths(&shaders_dir, &preset);
+                if let Some(ref mpv) = ctx.player_mpv {
+                    set_glsl_shaders(mpv, &paths);
+                }
+                let mut mgr = ctx.enhanced.lock().unwrap();
+                mgr.set_shader_preset(&preset);
+
+                let id_json = serde_json::to_string(&id).unwrap_or_else(|_| "\"\"".to_string());
+                let preset_json =
+                    serde_json::to_string(&preset).unwrap_or_else(|_| "\"off\"".to_string());
+                send_js_callback(
+                    &ctx.webview_cmd_tx,
+                    "__receiveShaderPresetResult",
+                    &[id_json, "true".to_string(), preset_json, "null".to_string()],
+                );
+                send_enhanced_ui_data(&mgr, &ctx.webview_cmd_tx);
+            } else {
+                let tx = ctx.webview_cmd_tx.clone();
+                let mpv = ctx.player_mpv.clone();
+                let enhanced = ctx.enhanced.clone();
+                thread::spawn(move || {
+                    let result = shaders::ensure_preset_downloaded(&shaders_dir, &preset);
+                    let id_json = serde_json::to_string(&id).unwrap_or_else(|_| "\"\"".to_string());
+                    let preset_json =
+                        serde_json::to_string(&preset).unwrap_or_else(|_| "\"off\"".to_string());
+
+                    match result {
+                        Ok(paths) => {
+                            if let Some(ref mpv) = mpv {
+                                set_glsl_shaders(mpv, &paths);
+                            }
+                            let mut mgr = enhanced.lock().unwrap();
+                            mgr.set_shader_preset(&preset);
+                            send_js_callback(
+                                &tx,
+                                "__receiveShaderPresetResult",
+                                &[id_json, "true".to_string(), preset_json, "null".to_string()],
+                            );
+                            send_enhanced_ui_data(&mgr, &tx);
+                        }
+                        Err(err) => {
+                            eprintln!("[Shaders] Failed to apply preset {preset}: {err}");
+                            let err_json = serde_json::to_string(&err)
+                                .unwrap_or_else(|_| "\"Error\"".to_string());
+                            send_js_callback(
+                                &tx,
+                                "__receiveShaderPresetResult",
+                                &[id_json, "false".to_string(), preset_json, err_json],
+                            );
+                        }
+                    }
+                });
+            }
+        }
+        EnhancedAction::GetPlaybackStats { id } => {
+            if let Some(ref mpv) = ctx.player_mpv {
+                let stats = get_playback_stats(mpv, ctx.window_handle);
+                if let (Ok(id_json), Ok(stats_json)) =
+                    (serde_json::to_string(&id), serde_json::to_string(&stats))
+                {
+                    send_js_callback(
+                        &ctx.webview_cmd_tx,
+                        "__receivePlaybackStats",
+                        &[id_json, stats_json],
+                    );
+                }
+            }
+        }
+        EnhancedAction::GetChapters => {
+            let chapters = ctx
+                .player_mpv
+                .as_ref()
+                .map(|mpv| get_chapters(mpv))
+                .unwrap_or_default();
+            if let Ok(json) = serde_json::to_string(&chapters) {
+                send_js_callback(&ctx.webview_cmd_tx, "__receiveChapters", &[json]);
+            }
+        }
+        EnhancedAction::SetChapterMarkers { enabled } => {
+            let mut mgr = ctx.enhanced.lock().unwrap();
+            mgr.set_chapter_markers(enabled);
+            send_enhanced_ui_data(&mgr, &ctx.webview_cmd_tx);
+        }
     }
 }
 
@@ -1192,6 +1643,10 @@ fn handle_rpc_request(msg: RPCRequest, ctx: &IpcBridgeContext) {
             }
         }
         Some("discord-connect") => {
+            if !ctx.enhanced.lock().unwrap().settings.discord_rpc {
+                ctx.web_tx.send(RPCResponse::discord_status(false)).ok();
+                return;
+            }
             if let Err(e) = ctx.discord_rpc.connect() {
                 eprintln!("Discord connect error: {e}");
                 ctx.web_tx.send(RPCResponse::discord_status(false)).ok();
@@ -1204,6 +1659,9 @@ fn handle_rpc_request(msg: RPCRequest, ctx: &IpcBridgeContext) {
             ctx.web_tx.send(RPCResponse::discord_status(false)).ok();
         }
         Some("discord-set-activity") => {
+            if !ctx.enhanced.lock().unwrap().settings.discord_rpc {
+                return;
+            }
             if let Some(params) = msg.get_params() {
                 let state = params.get("state").and_then(|v| v.as_str()).unwrap_or("");
                 let details = params.get("details").and_then(|v| v.as_str()).unwrap_or("");

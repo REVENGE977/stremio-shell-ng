@@ -1,7 +1,7 @@
 import { EnhancedData, MetaData, PluginUiData, ThemeUiData } from '../types';
 import { fetchRegistry, fetchThemeVersionFromDownload } from '../marketplace/marketplaceManager';
 import { modalManager } from '../components/modals/modalManager';
-import { postEnhancedMessage } from '../utils/dom';
+import { escapeHtml, postEnhancedMessage } from '../utils/dom';
 
 let currentEnhancedData: EnhancedData = { plugins: [], themes: [], activeTheme: null };
 
@@ -26,7 +26,16 @@ const CLIENT_RELEASE_SOURCES: { apiUrl: string; releaseUrl: string }[] = [
     }
 ];
 
-let latestClientVersionCache: { version: string; releaseUrl: string } | null = null;
+export interface LatestClientRelease {
+    version: string;
+    releaseUrl: string;
+    tagName?: string;
+    releaseName?: string;
+    publishedAt?: string;
+    body?: string;
+}
+
+let latestClientVersionCache: LatestClientRelease | null = null;
 let clientUpdateCheckInProgress = false;
 
 export function updateUpdateManagerData(data: EnhancedData): void {
@@ -41,7 +50,7 @@ export function getCurrentClientVersion(): string {
     );
 }
 
-export function getLatestClientVersion(): { version: string; releaseUrl: string } | null {
+export function getLatestClientVersion(): LatestClientRelease | null {
     return latestClientVersionCache;
 }
 
@@ -303,56 +312,76 @@ export async function checkUpdateData(
 }
 
 const inFlightChecks = new Set<string>();
+const UPDATE_CHECK_COOLDOWN_MS = 5 * 60 * 1000;
+const itemUpdateCache = new Map<string, { checkedAt: number; result: UpdateCheckResult | null }>();
+let lastAutoUpdateCheckAt = 0;
+let autoUpdateCheckInFlight = false;
+
+function bindItemUpdateButton(
+    updateButton: HTMLElement,
+    itemFile: string,
+    type: 'plugin' | 'theme',
+    updateData: UpdateCheckResult | null
+): boolean {
+    if (!updateData || !updateData.hasUpdate || !updateData.newContent || !updateData.newMetaData) {
+        updateButton.style.display = 'none';
+        return false;
+    }
+
+    updateButton.style.display = 'inline-flex';
+    updateButton.setAttribute('title', `Update available: v${updateData.newMetaData.version}`);
+    const label = updateButton.querySelector('.label-OnWh2') || updateButton;
+    label.textContent = `Update (v${updateData.newMetaData.version})`;
+
+    updateButton.onclick = async (e) => {
+        e.stopPropagation();
+
+        // Warn about non-registry updates for plugins
+        if (type === 'plugin' && updateData.registryVersion !== updateData.newMetaData!.version) {
+            const result = await modalManager.showAlert(
+                'warning',
+                'Confirm Update',
+                `This update for ${updateData.installedMetaData?.name || itemFile} (v${updateData.newMetaData!.version}) isn't submitted to the registry (Community Marketplace) yet, and thus has not been confirmed safe.\n\nAre you sure you want to update? It's recommended to read the source code of the update before updating.`,
+                ['Yes', 'No', 'View Source Code']
+            );
+
+            if (result === 0) {
+                await applyUpdate(type, itemFile, updateData.newContent!, updateData.newMetaData!);
+            } else if (result === 2 && updateData.updateUrl) {
+                try { window.open(updateData.updateUrl, '_blank'); } catch (_) {}
+            }
+        } else {
+            await applyUpdate(type, itemFile, updateData.newContent!, updateData.newMetaData!);
+        }
+    };
+
+    return true;
+}
 
 /**
  * Check updates for a single item and update its UI button if an update is found.
  */
 export async function checkForItemUpdatesUI(
     itemFile: string,
-    type: 'plugin' | 'theme'
+    type: 'plugin' | 'theme',
+    force = false
 ): Promise<boolean> {
     const updateButton = document.getElementById(`${itemFile}-update`);
     if (!updateButton) return false;
+
+    const cacheKey = `${type}:${itemFile}`;
+    const cached = !force ? itemUpdateCache.get(cacheKey) : undefined;
+    if (cached && (Date.now() - cached.checkedAt) < UPDATE_CHECK_COOLDOWN_MS) {
+        return bindItemUpdateButton(updateButton, itemFile, type, cached.result);
+    }
 
     if (inFlightChecks.has(itemFile)) return false;
     inFlightChecks.add(itemFile);
 
     try {
         const updateData = await checkUpdateData(itemFile, type);
-        if (!updateData || !updateData.hasUpdate || !updateData.newContent || !updateData.newMetaData) {
-            updateButton.style.display = 'none';
-            return false;
-        }
-
-        // Show the update button
-        updateButton.style.display = 'inline-flex';
-        updateButton.setAttribute('title', `Update available: v${updateData.newMetaData.version}`);
-        const label = updateButton.querySelector('.label-OnWh2') || updateButton;
-        label.textContent = `Update (v${updateData.newMetaData.version})`;
-
-        updateButton.onclick = async (e) => {
-            e.stopPropagation();
-
-            // Warn about non-registry updates for plugins
-            if (type === 'plugin' && updateData.registryVersion !== updateData.newMetaData!.version) {
-                const result = await modalManager.showAlert(
-                    'warning',
-                    'Confirm Update',
-                    `This update for ${updateData.installedMetaData?.name || itemFile} (v${updateData.newMetaData!.version}) isn't submitted to the registry (Community Marketplace) yet, and thus has not been confirmed safe.\n\nAre you sure you want to update? It's recommended to read the source code of the update before updating.`,
-                    ['Yes', 'No', 'View Source Code']
-                );
-
-                if (result === 0) {
-                    await applyUpdate(type, itemFile, updateData.newContent!, updateData.newMetaData!);
-                } else if (result === 2 && updateData.updateUrl) {
-                    try { window.open(updateData.updateUrl, '_blank'); } catch (_) {}
-                }
-            } else {
-                await applyUpdate(type, itemFile, updateData.newContent!, updateData.newMetaData!);
-            }
-        };
-
-        return true;
+        itemUpdateCache.set(cacheKey, { checkedAt: Date.now(), result: updateData });
+        return bindItemUpdateButton(updateButton, itemFile, type, updateData);
     } catch (err) {
         console.error(`[Enhanced Update] Error updating UI for ${itemFile}:`, err);
         return false;
@@ -376,6 +405,8 @@ export async function applyUpdate(
     if (updateButton) updateButton.style.pointerEvents = 'none';
 
     try {
+        itemUpdateCache.delete(`${type}:${itemFile}`);
+
         postEnhancedMessage('installMod', {
             modType: type,
             fileName: itemFile,
@@ -422,6 +453,15 @@ export async function applyUpdate(
  * Scan all installed plugins and themes for updates.
  */
 export async function checkForAllUpdates(isManual = false): Promise<void> {
+    const now = Date.now();
+    if (!isManual) {
+        if (autoUpdateCheckInFlight || (now - lastAutoUpdateCheckAt) < UPDATE_CHECK_COOLDOWN_MS) {
+            return;
+        }
+        autoUpdateCheckInFlight = true;
+        lastAutoUpdateCheckAt = now;
+    }
+
     if (isManual) {
         modalManager.showToast(
             'check-updates-progress',
@@ -445,7 +485,7 @@ export async function checkForAllUpdates(isManual = false): Promise<void> {
             : (((window as any).__INITIAL_ENHANCED_DATA__?.plugins) || []);
 
         for (const p of plugins) {
-            const hasUp = await checkForItemUpdatesUI(p.fileName, 'plugin');
+            const hasUp = await checkForItemUpdatesUI(p.fileName, 'plugin', isManual);
             if (hasUp) updateCount++;
         }
 
@@ -454,7 +494,7 @@ export async function checkForAllUpdates(isManual = false): Promise<void> {
             : (((window as any).__INITIAL_ENHANCED_DATA__?.themes) || []);
 
         for (const t of themes) {
-            const hasUp = await checkForItemUpdatesUI(t.fileName, 'theme');
+            const hasUp = await checkForItemUpdatesUI(t.fileName, 'theme', isManual);
             if (hasUp) updateCount++;
         }
 
@@ -476,6 +516,9 @@ export async function checkForAllUpdates(isManual = false): Promise<void> {
             }
         }
     } finally {
+        if (!isManual) {
+            autoUpdateCheckInFlight = false;
+        }
         if (checkBtn) {
             checkBtn.style.pointerEvents = '';
             checkBtn.textContent = 'Check for Updates';
@@ -535,35 +578,78 @@ export function extractClientVersionFromRemote(content: string): string | null {
     return null;
 }
 
-/**
- * Fetch the latest client version from the GitHub repository (Cargo.toml / VERSION),
- * falling back to the latest GitHub release name (then tag_name) if no version file
- * exists or if the version file does not report a newer version than currentVersion.
- */
-export async function fetchLatestClientVersion(currentVersion?: string): Promise<{ version: string; releaseUrl: string } | null> {
-    let bestCandidate: { version: string; releaseUrl: string } | null = null;
-    const compareAgainst = currentVersion || getCurrentClientVersion();
+function formatInlineMarkdown(escapedLine: string): string {
+    return escapedLine
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, text, url) => {
+            return `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#a78bfa;text-decoration:underline;">${text}</a>`;
+        })
+        .replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.1);padding:1px 5px;border-radius:4px;font-size:0.86em;">$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+}
 
-    for (const source of CLIENT_VERSION_SOURCES) {
-        try {
-            const res = await fetch(source.url, { cache: 'no-store' });
-            if (!res.ok) continue;
-            const text = await res.text();
-            const version = extractClientVersionFromRemote(text);
-            if (version) {
-                if (!bestCandidate || isNewerVersion(version, bestCandidate.version)) {
-                    bestCandidate = { version, releaseUrl: source.releaseUrl };
-                }
-                if (isNewerVersion(version, compareAgainst)) {
-                    latestClientVersionCache = bestCandidate;
-                    return latestClientVersionCache;
-                }
-                break;
-            }
-        } catch (err) {
-            console.warn(`[Enhanced Client Update] Failed to fetch ${source.url}:`, err);
-        }
+export function renderPatchNotesMarkdown(markdown?: string): string {
+    if (!markdown || !markdown.trim()) {
+        return '<div style="color:rgba(255,255,255,0.55);font-style:italic;">No release notes provided for this release.</div>';
     }
+
+    const lines = escapeHtml(markdown).split(/\r?\n/);
+    const out: string[] = [];
+    let inList = false;
+
+    const closeList = () => {
+        if (inList) {
+            out.push('</ul>');
+            inList = false;
+        }
+    };
+
+    for (const raw of lines) {
+        const trimmed = raw.trim();
+        if (!trimmed) {
+            closeList();
+            continue;
+        }
+        if (/^---+$/.test(trimmed)) {
+            closeList();
+            out.push('<hr style="border:none;border-top:1px solid rgba(255,255,255,0.12);margin:10px 0;">');
+            continue;
+        }
+
+        const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
+        if (headingMatch) {
+            closeList();
+            const level = headingMatch[1].length;
+            const size = level === 1 ? '1.08rem' : level === 2 ? '0.98rem' : '0.9rem';
+            out.push(`<div style="font-weight:700;font-size:${size};color:#fff;margin:10px 0 4px;">${formatInlineMarkdown(headingMatch[2])}</div>`);
+            continue;
+        }
+
+        const bulletMatch = trimmed.match(/^[-*+]\s+(.+)$/);
+        if (bulletMatch) {
+            if (!inList) {
+                out.push('<ul style="margin:4px 0 8px 18px;padding:0;list-style:disc;">');
+                inList = true;
+            }
+            out.push(`<li style="margin:3px 0;color:#e4e4e7;">${formatInlineMarkdown(bulletMatch[1])}</li>`);
+            continue;
+        }
+
+        closeList();
+        out.push(`<p style="margin:4px 0;color:#d4d4d8;">${formatInlineMarkdown(trimmed)}</p>`);
+    }
+
+    closeList();
+    return out.join('');
+}
+
+/**
+ * Fetch the latest client version from GitHub Releases (including patch notes)
+ * and GitHub Cargo.toml/VERSION sources.
+ */
+export async function fetchLatestClientVersion(currentVersion?: string): Promise<LatestClientRelease | null> {
+    let bestCandidate: LatestClientRelease | null = null;
+    let releaseCandidate: LatestClientRelease | null = null;
+    const compareAgainst = currentVersion || getCurrentClientVersion();
 
     for (const source of CLIENT_RELEASE_SOURCES) {
         try {
@@ -580,9 +666,15 @@ export async function fetchLatestClientVersion(currentVersion?: string): Promise
                     typeof data.html_url === 'string' && data.html_url.trim()
                         ? data.html_url.trim()
                         : source.releaseUrl;
-                if (!bestCandidate || isNewerVersion(version, bestCandidate.version)) {
-                    bestCandidate = { version, releaseUrl };
-                }
+                releaseCandidate = {
+                    version,
+                    releaseUrl,
+                    tagName: typeof data.tag_name === 'string' ? data.tag_name : undefined,
+                    releaseName: typeof data.name === 'string' ? data.name : undefined,
+                    publishedAt: typeof data.published_at === 'string' ? data.published_at : undefined,
+                    body: typeof data.body === 'string' ? data.body : undefined
+                };
+                bestCandidate = releaseCandidate;
                 break;
             }
         } catch (err) {
@@ -590,10 +682,71 @@ export async function fetchLatestClientVersion(currentVersion?: string): Promise
         }
     }
 
+    for (const source of CLIENT_VERSION_SOURCES) {
+        try {
+            const res = await fetch(source.url, { cache: 'no-store' });
+            if (!res.ok) continue;
+            const text = await res.text();
+            const version = extractClientVersionFromRemote(text);
+            if (version) {
+                if (!bestCandidate || isNewerVersion(version, bestCandidate.version)) {
+                    bestCandidate = {
+                        version,
+                        releaseUrl: releaseCandidate?.releaseUrl || source.releaseUrl,
+                        tagName: releaseCandidate?.tagName,
+                        releaseName: releaseCandidate?.releaseName,
+                        publishedAt: releaseCandidate?.publishedAt,
+                        body: releaseCandidate?.body
+                    };
+                }
+                if (isNewerVersion(version, compareAgainst)) {
+                    latestClientVersionCache = bestCandidate;
+                    return latestClientVersionCache;
+                }
+                break;
+            }
+        } catch (err) {
+            console.warn(`[Enhanced Client Update] Failed to fetch ${source.url}:`, err);
+        }
+    }
+
     if (bestCandidate) {
         latestClientVersionCache = bestCandidate;
     }
     return bestCandidate;
+}
+
+export async function showPatchNotesModal(release?: LatestClientRelease | null): Promise<void> {
+    const target = release || getLatestClientVersion() || (await fetchLatestClientVersion());
+    if (!target) {
+        modalManager.showToast('patch-notes-err', 'Release Notes Unavailable', 'Could not fetch release notes from GitHub.', 'fail');
+        return;
+    }
+
+    const dateLine = target.publishedAt
+        ? `Published ${new Date(target.publishedAt).toLocaleDateString()}`
+        : '';
+
+    const html = `
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:12px;">
+            <span style="padding:3px 9px;border-radius:999px;background:rgba(123,91,245,0.28);color:#dcd4ff;font-weight:700;font-size:0.82rem;">v${escapeHtml(target.version)}</span>
+            ${dateLine ? `<span style="font-size:0.82rem;color:rgba(255,255,255,0.6);">${escapeHtml(dateLine)}</span>` : ''}
+        </div>
+        <div style="padding:12px 14px;border-radius:8px;background:rgba(0,0,0,0.28);border:1px solid rgba(255,255,255,0.08);">
+            ${renderPatchNotesMarkdown(target.body)}
+        </div>
+    `;
+
+    const choice = await modalManager.showRichAlert(
+        'info',
+        target.releaseName || `Release Notes (v${target.version})`,
+        html,
+        ['Open Release Page', 'Close']
+    );
+
+    if (choice === 0) {
+        try { window.open(target.releaseUrl, '_blank'); } catch (_) {}
+    }
 }
 
 /**
@@ -651,19 +804,29 @@ export async function checkClientUpdate(isManual = false): Promise<boolean> {
         const remParsed = parseClientVersion(remote.version);
         const curBaseStr = curParsed.base.join('.');
         const remBaseStr = remParsed.base.join('.');
-        const curEnhNum = curParsed.enhanced[0] ?? 0;
-        const remEnhNum = remParsed.enhanced[0] ?? 0;
+        const curEnhNum = curParsed.enhanced.length > 0 ? curParsed.enhanced.join('.') : '0';
+        const remEnhNum = remParsed.enhanced.length > 0 ? remParsed.enhanced.join('.') : '0';
 
-        const details =
-            `A new version of Stremio Enhanced NG is available!\n\n` +
-            `Installed Version: v${currentVersion} (Base ${curBaseStr}, Enhanced build #${curEnhNum})\n` +
-            `Latest Version: v${remote.version} (Base ${remBaseStr}, Enhanced build #${remEnhNum})\n\n` +
-            `Would you like to open the GitHub Releases page to download the update?`;
+        const detailsHtml = `
+            <div style="margin-bottom:10px;color:#e4e4e7;">A new version of <strong>Stremio Enhanced NG</strong> is available!</div>
+            <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:0.88rem;padding:10px 12px;border-radius:8px;background:rgba(255,255,255,0.05);margin-bottom:12px;">
+                <div style="color:rgba(255,255,255,0.6);">Installed:</div>
+                <div>v${escapeHtml(currentVersion)} (Base ${escapeHtml(curBaseStr)}, Enhanced #${escapeHtml(curEnhNum)})</div>
+                <div style="color:rgba(255,255,255,0.6);">Latest:</div>
+                <div style="color:#a78bfa;font-weight:700;">v${escapeHtml(remote.version)} (Base ${escapeHtml(remBaseStr)}, Enhanced #${escapeHtml(remEnhNum)})</div>
+            </div>
+            ${remote.body ? `
+                <div style="font-size:0.82rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.58);margin-bottom:6px;">What's New</div>
+                <div style="padding:10px 12px;border-radius:8px;background:rgba(0,0,0,0.28);border:1px solid rgba(255,255,255,0.08);">
+                    ${renderPatchNotesMarkdown(remote.body)}
+                </div>
+            ` : ''}
+        `;
 
-        const choice = await modalManager.showAlert(
+        const choice = await modalManager.showRichAlert(
             'info',
             'Client Update Available',
-            details,
+            detailsHtml,
             ['Download / Open Release Page', 'Skip This Version', 'Later']
         );
 
