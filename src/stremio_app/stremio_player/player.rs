@@ -1084,7 +1084,11 @@ fn create_message_thread(
                     set_property(name, value, &mpv);
                 }
                 InMsg(InMsgFn::MpvSetProp, InMsgArgs::StProp(name, PropVal::Num(value))) => {
-                    set_property(name, value, &mpv);
+                    if matches!(name, PropKey::Int(_)) && value.fract() == 0.0 {
+                        set_property(name, value as i64, &mpv);
+                    } else {
+                        set_property(name, value, &mpv);
+                    }
                 }
                 InMsg(InMsgFn::MpvSetProp, InMsgArgs::StProp(name, PropVal::Str(value))) => {
                     let is_vo = name.to_string() == "vo";

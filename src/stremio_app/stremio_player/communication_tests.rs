@@ -1,6 +1,6 @@
 use crate::stremio_app::stremio_player::communication::{
-    BoolProp, CmdVal, InMsg, InMsgArgs, InMsgFn, PlayerEnded, PlayerProprChange, PlayerResponse,
-    PropKey, PropVal,
+    BoolProp, CmdVal, FpProp, InMsg, InMsgArgs, InMsgFn, IntProp, PlayerEnded, PlayerProprChange,
+    PlayerResponse, PropKey, PropVal, StrProp,
 };
 use libmpv2::{events::PropertyData, mpv_end_file_reason};
 
@@ -346,4 +346,80 @@ fn subtitle_commands_require_deferred_selection_and_explicit_ids() {
         .media_transition(),
         None
     );
+}
+
+#[test]
+fn secondary_subtitle_properties_round_trip() {
+    let cases = [
+        (
+            serde_json::json!(["mpv-set-prop", ["secondary-sid", "2"]]),
+            InMsg(
+                InMsgFn::MpvSetProp,
+                InMsgArgs::StProp(
+                    PropKey::Int(IntProp::SecondarySid),
+                    PropVal::Str("2".to_string()),
+                ),
+            ),
+        ),
+        (
+            serde_json::json!(["mpv-set-prop", ["secondary-sid", "no"]]),
+            InMsg(
+                InMsgFn::MpvSetProp,
+                InMsgArgs::StProp(
+                    PropKey::Int(IntProp::SecondarySid),
+                    PropVal::Str("no".to_string()),
+                ),
+            ),
+        ),
+        (
+            serde_json::json!(["mpv-set-prop", ["secondary-sub-visibility", false]]),
+            InMsg(
+                InMsgFn::MpvSetProp,
+                InMsgArgs::StProp(
+                    PropKey::Bool(BoolProp::SecondarySubVisibility),
+                    PropVal::Bool(false),
+                ),
+            ),
+        ),
+        (
+            serde_json::json!(["mpv-set-prop", ["secondary-sub-delay", -0.5]]),
+            InMsg(
+                InMsgFn::MpvSetProp,
+                InMsgArgs::StProp(
+                    PropKey::Fp(FpProp::SecondarySubDelay),
+                    PropVal::Num(-0.5),
+                ),
+            ),
+        ),
+        (
+            serde_json::json!(["mpv-set-prop", ["secondary-sub-pos", 12.0]]),
+            InMsg(
+                InMsgFn::MpvSetProp,
+                InMsgArgs::StProp(
+                    PropKey::Fp(FpProp::SecondarySubPos),
+                    PropVal::Num(12.0),
+                ),
+            ),
+        ),
+        (
+            serde_json::json!(["mpv-observe-prop", "secondary-sub-text"]),
+            InMsg(
+                InMsgFn::MpvObserveProp,
+                InMsgArgs::ObProp(PropKey::Str(StrProp::SecondarySubText)),
+            ),
+        ),
+        (
+            serde_json::json!(["mpv-observe-prop", "sub-text"]),
+            InMsg(
+                InMsgFn::MpvObserveProp,
+                InMsgArgs::ObProp(PropKey::Str(StrProp::SubText)),
+            ),
+        ),
+    ];
+
+    for (json, expected) in cases {
+        let parsed: InMsg = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(parsed, expected);
+        assert_eq!(serde_json::to_value(parsed).unwrap(), json);
+    }
 }

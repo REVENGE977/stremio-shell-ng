@@ -172,6 +172,7 @@ pub enum BoolProp {
     Seeking,
     EofReached,
     Keepaspect,
+    SecondarySubVisibility,
 }
 stringable!(BoolProp);
 // Int
@@ -182,6 +183,7 @@ pub enum IntProp {
     Aid,
     Vid,
     Sid,
+    SecondarySid,
 }
 stringable!(IntProp);
 // Fp
@@ -200,6 +202,8 @@ pub enum FpProp {
     SubPos,
     Speed,
     Panscan,
+    SecondarySubDelay,
+    SecondarySubPos,
 }
 stringable!(FpProp);
 // Str
@@ -215,10 +219,12 @@ pub enum StrProp {
     MpvVersion,
     Osc,
     Path,
+    SecondarySubText,
     SubAssOverride,
     SubBackColor,
     SubBorderColor,
     SubColor,
+    SubText,
     TrackList,
     Vf,
     VideoParams,
